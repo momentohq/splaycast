@@ -1,0 +1,25 @@
+[package]
+name = "splaycast"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+bench = false
+
+[[bench]]
+name = "bench_main"
+harness = false
+
+[dependencies]
+arc-swap     = { version = "1.6" }
+futures      = { version = "0.3" }
+log          = { version = "0.4" }
+ringbuf      = { version = "0.3" }
+
+[dev-dependencies]
+criterion    = { version = "0.5", features = ["async_tokio"] }
+env_logger   = { version = "0.10" }
+rand         = { version = "0.8" }
+test-log     = { version = "0.2" }
+tokio        = { version = "1.33", features = ["rt-multi-thread", "macros", "time", "sync"]}
+tokio-stream = { version = "0.1" }
