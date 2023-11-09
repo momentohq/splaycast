@@ -2,11 +2,12 @@ use std::{
     collections::VecDeque,
     sync::{
         atomic::{AtomicBool, AtomicUsize},
-        Arc, Mutex,
+        Arc,
     },
 };
 
 use arc_swap::ArcSwap;
+use crossbeam_queue::SegQueue;
 
 use crate::SplaycastEntry;
 
@@ -15,7 +16,7 @@ where
     Item: Clone,
 {
     subscriber_count: AtomicUsize,
-    wakers: Arc<Mutex<VecDeque<WakeHandle>>>,
+    wakers: Arc<SegQueue<WakeHandle>>,
     queue: Arc<ArcSwap<VecDeque<SplaycastEntry<Item>>>>,
 }
 
@@ -24,19 +25,9 @@ where
     Item: Clone,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let m = self.wakers.lock().expect("local mutex");
         f.debug_struct("Shared")
             .field("subscriber_count", &self.subscriber_count)
-            .field("wakers_count", &m.len())
-            .field(
-                "wakers",
-                &m.iter()
-                    .map(WakeHandle::next_message_id)
-                    .map(|n| n.to_string())
-                    .collect::<Vec<String>>()
-                    .join(","),
-            )
-            // .field("queue", &self.queue)
+            .field("wakers_count", &self.wakers.len())
             .finish()
     }
 }
@@ -92,19 +83,17 @@ where
         self.queue.swap(Arc::new(next))
     }
 
-    pub fn swap_wakers(&self, buffer: &mut VecDeque<WakeHandle>) {
-        let mut wakers = self.wakers.lock().expect("local mutex");
-        log::trace!("swap wakers length {} -> {}", wakers.len(), buffer.len());
-        std::mem::swap(&mut *wakers, buffer)
-    }
-
     pub fn register_waker(&self, handle: WakeHandle) {
         log::trace!("register waker at {}", handle.message_id);
-        self.wakers.lock().expect("local mutex").push_back(handle)
+        self.wakers.push(handle)
     }
 
-    pub fn register_waker_batch(&self, batch: impl IntoIterator<Item = WakeHandle>) {
-        self.wakers.lock().expect("local mutex").extend(batch)
+    pub fn pop_waker(&self) -> Option<WakeHandle> {
+        self.wakers.pop()
+    }
+
+    pub fn waiting(&self) -> usize {
+        self.wakers.len()
     }
 }
 

@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::{
-    shared::{Shared, WakeHandle},
+    shared::Shared,
     SplaycastEntry,
 };
 
@@ -19,7 +19,6 @@ where
     upstream: Upstream,
     // TODO: buffer the buffers
     shared: Arc<Shared<Item>>,
-    wakers_in_progress: VecDeque<WakeHandle>,
 }
 
 impl<Upstream, Item> std::fmt::Debug for SplaycastEngine<Upstream, Item>
@@ -51,7 +50,6 @@ where
             next_message_id: 0,
             upstream,
             shared,
-            wakers_in_progress: Default::default(),
         }
     }
 
@@ -123,30 +121,18 @@ where
         }
 
         // Service downstreams
-        let shared = self.shared.clone(); // to work around borrow checker shenanigans
-        shared.swap_wakers(&mut self.wakers_in_progress);
-
-        if self.wakers_in_progress.is_empty() {
-            log::trace!("nobody waiting pending");
-            // nobody is waiting for this topic.
-            return Poll::Pending;
-        }
-
         let next_message_id = self.next_message_id;
 
-        let wakers_in_progress_count = self.wakers_in_progress.len();
-        for _ in 0..wakers_in_progress_count {
-            let waker = self.wakers_in_progress.pop_front().expect("I checked this boundary");
+        for _ in 0..self.shared.waiting() {
+            let waker = self.shared.pop_waker().expect("this is the only stack that pops waiters");
+
             if next_message_id < waker.next_message_id() {
                 log::trace!("requeueing at {}", waker.next_message_id());
-                self.wakers_in_progress.push_back(waker);
+                self.shared.register_waker(waker);
                 continue; // this waker does not need to be woken
             }
             log::trace!("waking at {}", waker.next_message_id());
             waker.wake()
-        }
-        if !self.wakers_in_progress.is_empty() {
-            shared.register_waker_batch(self.wakers_in_progress.drain(..));
         }
 
         // Awaiting an upstream message, for which we are already Pending, and we've woken what we need to
