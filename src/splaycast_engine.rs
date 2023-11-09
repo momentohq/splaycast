@@ -109,20 +109,25 @@ where
         log::trace!("poll: {self:?}");
         let (dirty, early_out) = self.as_mut().absorb_upstream(context);
         if let Some(early_out) = early_out {
-            log::trace!("early out");
+            log::trace!("early out"); // this happens when the upstream is closed
             return early_out;
         }
+        let next_message_id = self.next_message_id;
         // Upstream is Pending here.
 
-        if !dirty {
+        let wake_interest = self.shared.load_and_reset_wake_interest(context);
+        let some_wakers_need_serviced = match wake_interest {
+            Some(wake_interest) => wake_interest < next_message_id,
+            None => false,
+        };
+
+        if !(dirty || some_wakers_need_serviced) {
             log::trace!("clean pending");
             // I woke everybody and nothing new happened yet. Let's wait for upstream messages.
             return Poll::Pending;
         }
 
         // Service downstreams
-        let next_message_id = self.next_message_id;
-
         for _ in 0..self.shared.waiting() {
             let waker = self.shared.pop_waker().expect("this is the only stack that pops waiters");
 

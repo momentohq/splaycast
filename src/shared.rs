@@ -1,13 +1,14 @@
 use std::{
     collections::VecDeque,
     sync::{
-        atomic::{AtomicBool, AtomicUsize},
+        atomic::{AtomicBool, AtomicUsize, AtomicU64, Ordering},
         Arc,
-    },
+    }, task::Context,
 };
 
 use arc_swap::ArcSwap;
 use crossbeam_queue::SegQueue;
+use futures::task::AtomicWaker;
 
 use crate::SplaycastEntry;
 
@@ -18,6 +19,8 @@ where
     subscriber_count: AtomicUsize,
     wakers: Arc<SegQueue<WakeHandle>>,
     queue: Arc<ArcSwap<VecDeque<SplaycastEntry<Item>>>>,
+    wake_interest_sequence_number: AtomicU64,
+    waker: AtomicWaker,
 }
 
 impl<Item> std::fmt::Debug for Shared<Item>
@@ -41,6 +44,8 @@ where
             subscriber_count: Default::default(),
             wakers: Default::default(),
             queue: Arc::new(ArcSwap::from_pointee(VecDeque::with_capacity(buffer_size))),
+            wake_interest_sequence_number: Default::default(),
+            waker: Default::default(),
         }
     }
 
@@ -84,8 +89,13 @@ where
     }
 
     pub fn register_waker(&self, handle: WakeHandle) {
-        log::trace!("register waker at {}", handle.message_id);
-        self.wakers.push(handle)
+        let message_id = handle.message_id;
+        log::trace!("register waker at {message_id}");
+        self.wakers.push(handle);
+        let previous = self.wake_interest_sequence_number.fetch_min(message_id, Ordering::SeqCst);
+        if message_id < previous {
+            self.waker.wake()
+        }
     }
 
     pub fn pop_waker(&self) -> Option<WakeHandle> {
@@ -94,6 +104,16 @@ where
 
     pub fn waiting(&self) -> usize {
         self.wakers.len()
+    }
+
+    pub fn load_and_reset_wake_interest(&self, context: &mut Context) -> Option<u64> {
+        let stored = self.wake_interest_sequence_number.fetch_max(u64::MAX, Ordering::SeqCst);
+        self.waker.register(context.waker());
+        if stored == u64::MAX {
+            None
+        } else {
+            Some(stored)
+        }
     }
 }
 
