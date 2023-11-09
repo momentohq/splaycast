@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    shared::Shared, splaycast_engine::SplaycastEngine, splaycast_receiver::SplaycastReceiver,
+    shared::Shared, engine::Engine, receiver::Receiver,
 };
 
 #[derive(Debug)]
@@ -20,17 +20,17 @@ where
     pub fn new<Upstream>(
         upstream: Upstream,
         buffer_size: usize,
-    ) -> (SplaycastEngine<Upstream, Item>, Self)
+    ) -> (Engine<Upstream, Item>, Self)
     where
         Upstream: futures::Stream<Item = Item> + Unpin,
     {
         let shared = Arc::new(Shared::new(buffer_size));
-        let engine = SplaycastEngine::new(upstream, shared.clone());
+        let engine = Engine::new(upstream, shared.clone());
         (engine, Self { shared })
     }
 
-    pub fn subscribe(&self) -> SplaycastReceiver<Item> {
-        SplaycastReceiver::new(self.shared.clone())
+    pub fn subscribe(&self) -> Receiver<Item> {
+        Receiver::new(self.shared.clone())
     }
 
     pub fn subscriber_count(&self) -> usize {

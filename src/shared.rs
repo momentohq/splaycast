@@ -1,9 +1,10 @@
 use std::{
     collections::VecDeque,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc,
-    }, task::Context,
+    },
+    task::Context,
 };
 
 use arc_swap::ArcSwap;
@@ -92,7 +93,9 @@ where
         let message_id = handle.message_id;
         log::trace!("register waker at {message_id}");
         self.wakers.push(handle);
-        let previous = self.wake_interest_sequence_number.fetch_min(message_id, Ordering::SeqCst);
+        let previous = self
+            .wake_interest_sequence_number
+            .fetch_min(message_id, Ordering::SeqCst);
         if message_id < previous {
             self.waker.wake()
         }
@@ -107,7 +110,9 @@ where
     }
 
     pub fn load_and_reset_wake_interest(&self, context: &mut Context) -> Option<u64> {
-        let stored = self.wake_interest_sequence_number.fetch_max(u64::MAX, Ordering::SeqCst);
+        let stored = self
+            .wake_interest_sequence_number
+            .fetch_max(u64::MAX, Ordering::SeqCst);
         self.waker.register(context.waker());
         if stored == u64::MAX {
             None

@@ -11,7 +11,7 @@ use crate::{
     SplaycastEntry, SplaycastMessage,
 };
 
-pub struct SplaycastReceiver<Item>
+pub struct Receiver<Item>
 where
     Item: Clone,
 {
@@ -20,7 +20,7 @@ where
     dirty: Arc<AtomicBool>,
 }
 
-impl<Item> std::fmt::Debug for SplaycastReceiver<Item>
+impl<Item> std::fmt::Debug for Receiver<Item>
 where
     Item: Clone,
 {
@@ -35,7 +35,7 @@ where
     }
 }
 
-impl<Item> SplaycastReceiver<Item>
+impl<Item> Receiver<Item>
 where
     Item: Clone,
 {
@@ -49,7 +49,8 @@ where
     }
 
     fn mark_clean_and_register_for_wake(&mut self, context: &mut Context<'_>) {
-        self.dirty.store(false, std::sync::atomic::Ordering::Release);
+        self.dirty
+            .store(false, std::sync::atomic::Ordering::Release);
         self.shared.register_waker(WakeHandle::new(
             self.next_message_id,
             context.waker().clone(),
@@ -58,7 +59,7 @@ where
     }
 }
 
-impl<Item> Drop for SplaycastReceiver<Item>
+impl<Item> Drop for Receiver<Item>
 where
     Item: Clone,
 {
@@ -67,7 +68,7 @@ where
     }
 }
 
-impl<Item> futures::Stream for SplaycastReceiver<Item>
+impl<Item> futures::Stream for Receiver<Item>
 where
     Item: Clone,
 {

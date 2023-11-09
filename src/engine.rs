@@ -6,12 +6,9 @@ use std::{
     task::{Context, Poll},
 };
 
-use crate::{
-    shared::Shared,
-    SplaycastEntry,
-};
+use crate::{shared::Shared, SplaycastEntry};
 
-pub struct SplaycastEngine<Upstream, Item>
+pub struct Engine<Upstream, Item>
 where
     Item: Clone,
 {
@@ -21,26 +18,26 @@ where
     shared: Arc<Shared<Item>>,
 }
 
-impl<Upstream, Item> std::fmt::Debug for SplaycastEngine<Upstream, Item>
+impl<Upstream, Item> std::fmt::Debug for Engine<Upstream, Item>
 where
     Item: Clone,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SplaycastEngine")
+        f.debug_struct("Engine")
             .field("next_message_id", &self.next_message_id)
             .field("shared", &self.shared)
             .finish()
     }
 }
 
-/// A SplaycastEngine is an api-less plugin to an event loop. It is an adapter between an
+/// Am Engine is an api-less plugin to an event loop. It is an adapter between an
 /// upstream Stream and a downstream Stream.
 ///
-/// SplaycastEngine can do its work without blocking or synchronizing with the receivers.
-/// This is true because SplaycastEngine uses the raw `poll` affordance of Future, which
+/// Engine can do its work without blocking or synchronizing with the receivers.
+/// This is true because Engine uses the raw `poll` affordance of Future, which
 /// vends an &mut view of self. There is a low frequency lock that is acquired to grab the
 /// list of wakers waiting for a new message, but that's the extent of the locking.
-impl<Upstream, Item> SplaycastEngine<Upstream, Item>
+impl<Upstream, Item> Engine<Upstream, Item>
 where
     Upstream: futures::Stream<Item = Item> + Unpin,
     Item: Clone + Send,
@@ -53,7 +50,10 @@ where
         }
     }
 
-    fn absorb_upstream(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> (bool, Option<Poll<()>>) {
+    fn absorb_upstream(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> (bool, Option<Poll<()>>) {
         let mut new_queue = {
             let shared_queue = self.shared.load_queue();
             let mut new_queue = VecDeque::with_capacity(shared_queue.capacity());
@@ -96,9 +96,9 @@ where
 }
 
 /// Safety: I don't use unsafe for this type
-impl<Upstream, Item> Unpin for SplaycastEngine<Upstream, Item> where Item: Clone {}
+impl<Upstream, Item> Unpin for Engine<Upstream, Item> where Item: Clone {}
 
-impl<Upstream, Item> futures::Future for SplaycastEngine<Upstream, Item>
+impl<Upstream, Item> futures::Future for Engine<Upstream, Item>
 where
     Upstream: futures::Stream<Item = Item> + Unpin,
     Item: Clone + Send,
@@ -129,7 +129,10 @@ where
 
         // Service downstreams
         for _ in 0..self.shared.waiting() {
-            let waker = self.shared.pop_waker().expect("this is the only stack that pops waiters");
+            let waker = self
+                .shared
+                .pop_waker()
+                .expect("this is the only stack that pops waiters");
 
             if next_message_id < waker.next_message_id() {
                 log::trace!("requeueing at {}", waker.next_message_id());
