@@ -7,6 +7,16 @@ use tokio::sync::Semaphore;
 pub mod broadcast_bench;
 pub mod splaycast_bench;
 
+fn compare_cast(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cast_comparison");
+
+    for threads in [32] {
+        let configs = long_test(threads);
+        broadcast_bench::broadcast(&mut group, configs.clone());
+        splaycast_bench::splaycast(&mut group, configs);
+    }
+}
+
 pub fn quick_test(threads: usize) -> Vec<Config> {
     vec![
         Config {
@@ -28,14 +38,11 @@ pub fn quick_test(threads: usize) -> Vec<Config> {
     ]
 }
 
-fn compare_cast(c: &mut Criterion) {
-    let mut group = c.benchmark_group("cast_comparison");
-
-    for threads in [1, 8, 16, 32] {
-        let configs = quick_test(threads);
-        broadcast_bench::broadcast(&mut group, configs.clone());
-        splaycast_bench::splaycast(&mut group, configs);
-    }
+pub fn long_test(threads: usize) -> Vec<Config> {
+    (0..20).map(|i| Config {
+        threads,
+        subscribers: 2_usize.pow(i),
+    }).collect()
 }
 
 #[derive(Debug, Clone)]

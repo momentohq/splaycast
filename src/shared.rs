@@ -18,7 +18,7 @@ where
     Item: Clone,
 {
     subscriber_count: AtomicUsize,
-    wakers: Arc<SegQueue<WakeHandle>>,
+    wakers: Arc<SegQueue<Option<WakeHandle>>>,
     queue: Arc<ArcSwap<VecDeque<SplaycastEntry<Item>>>>,
     wake_interest_sequence_number: AtomicU64,
     waker: AtomicWaker,
@@ -92,7 +92,7 @@ where
     pub fn register_waker(&self, handle: WakeHandle) {
         let message_id = handle.message_id;
         log::trace!("register waker at {message_id}");
-        self.wakers.push(handle);
+        self.wakers.push(Some(handle));
         let previous = self
             .wake_interest_sequence_number
             .fetch_min(message_id, Ordering::SeqCst);
@@ -102,11 +102,7 @@ where
     }
 
     pub fn pop_waker(&self) -> Option<WakeHandle> {
-        self.wakers.pop()
-    }
-
-    pub fn waiting(&self) -> usize {
-        self.wakers.len()
+        self.wakers.pop().unwrap_or_default()
     }
 
     pub fn load_and_reset_wake_interest(&self, context: &mut Context) -> Option<u64> {
@@ -119,6 +115,22 @@ where
         } else {
             Some(stored)
         }
+    }
+
+    pub fn iterate(self: &Arc<Self>) -> impl Iterator<Item = WakeHandle> {
+        self.wakers.push(None);
+        WakeIterator { shared: self.clone() }
+    }
+}
+
+struct WakeIterator<T> where T: Clone {
+    shared: Arc<Shared<T>>,
+}
+impl<T: Clone> Iterator for WakeIterator<T> {
+    type Item = WakeHandle;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.shared.pop_waker()
     }
 }
 

@@ -128,12 +128,7 @@ where
         }
 
         // Service downstreams
-        for _ in 0..self.shared.waiting() {
-            let waker = self
-                .shared
-                .pop_waker()
-                .expect("this is the only stack that pops waiters");
-
+        for waker in self.shared.iterate() {
             if next_message_id < waker.next_message_id() {
                 log::trace!("requeueing at {}", waker.next_message_id());
                 self.shared.register_waker(waker);
