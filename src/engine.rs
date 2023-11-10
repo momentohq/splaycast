@@ -6,7 +6,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use crate::{shared::Shared, SplaycastEntry};
+use crate::{shared::{Shared, WakeHandle}, SplaycastEntry};
 
 pub struct Engine<Upstream, Item>
 where
@@ -16,6 +16,8 @@ where
     upstream: Upstream,
     // TODO: buffer the buffers
     shared: Arc<Shared<Item>>,
+    parked_wakers: Vec<WakeHandle>,
+    staged_wakers: Option<Vec<WakeHandle>>,
 }
 
 impl<Upstream, Item> std::fmt::Debug for Engine<Upstream, Item>
@@ -47,6 +49,8 @@ where
             next_message_id: 0,
             upstream,
             shared,
+            parked_wakers: Default::default(),
+            staged_wakers: Default::default(),
         }
     }
 
@@ -107,39 +111,38 @@ where
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         log::trace!("poll: {self:?}");
+        self.shared.register_wake_interest(context); // In case we woke from a new waker, let's make sure it happens again
+
         let (dirty, early_out) = self.as_mut().absorb_upstream(context);
         if let Some(early_out) = early_out {
             log::trace!("early out"); // this happens when the upstream is closed
             return early_out;
         }
-        let next_message_id = self.next_message_id;
         // Upstream is Pending here.
 
-        let wake_interest = self.shared.load_and_reset_wake_interest(context);
-        let some_wakers_need_serviced = match wake_interest {
-            Some(wake_interest) => wake_interest < next_message_id,
-            None => false,
-        };
-
-        if !(dirty || some_wakers_need_serviced) {
-            log::trace!("clean pending");
-            // I woke everybody and nothing new happened yet. Let's wait for upstream messages.
-            return Poll::Pending;
+        if dirty {
+            log::trace!("notifying parked: {}", self.parked_wakers.len());
+            for waker in std::mem::replace(&mut self.parked_wakers, Vec::with_capacity(16)) {
+                waker.wake()
+            }
         }
 
         // Service downstreams
-        for waker in self.shared.iterate() {
-            if next_message_id < waker.next_message_id() {
-                log::trace!("requeueing at {}", waker.next_message_id());
-                self.shared.register_waker(waker);
-                continue; // this waker does not need to be woken
+        let shared = self.shared.clone();
+        let mut staged_wakers = shared.swap_wakelist(std::mem::take(&mut self.staged_wakers).unwrap_or_default());
+        for waker in staged_wakers.drain(..) {
+            if self.next_message_id < waker.next_message_id() {
+                log::trace!("parking at {}", waker.next_message_id());
+                self.parked_wakers.push(waker);
+                continue; // this waker does not need to be woken. We parked it waiting new data
             }
             log::trace!("waking at {}", waker.next_message_id());
-            waker.wake()
+            waker.wake();
         }
+        self.staged_wakers = Some(staged_wakers);
 
         // Awaiting an upstream message, for which we are already Pending, and we've woken what we need to
-        log::trace!("notified batch pending");
+        log::trace!("parked pending");
         Poll::Pending
     }
 }

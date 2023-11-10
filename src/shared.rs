@@ -1,8 +1,8 @@
 use std::{
     collections::VecDeque,
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex,
     },
     task::Context,
 };
@@ -18,9 +18,8 @@ where
     Item: Clone,
 {
     subscriber_count: AtomicUsize,
-    wakers: Arc<SegQueue<Option<WakeHandle>>>,
+    wakers: Arc<Mutex<Vec<WakeHandle>>>,
     queue: Arc<ArcSwap<VecDeque<SplaycastEntry<Item>>>>,
-    wake_interest_sequence_number: AtomicU64,
     waker: AtomicWaker,
 }
 
@@ -31,7 +30,6 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Shared")
             .field("subscriber_count", &self.subscriber_count)
-            .field("wakers_count", &self.wakers.len())
             .finish()
     }
 }
@@ -45,16 +43,17 @@ where
             subscriber_count: Default::default(),
             wakers: Default::default(),
             queue: Arc::new(ArcSwap::from_pointee(VecDeque::with_capacity(buffer_size))),
-            wake_interest_sequence_number: Default::default(),
             waker: Default::default(),
         }
     }
 
+    #[inline]
     pub fn subscriber_count(&self) -> usize {
         self.subscriber_count
             .load(std::sync::atomic::Ordering::Acquire)
     }
 
+    #[inline]
     pub fn increment_subscriber_count(&self) -> usize {
         let count = self
             .subscriber_count
@@ -64,6 +63,7 @@ where
         count
     }
 
+    #[inline]
     pub fn decrement_subscriber_count(&self) -> usize {
         let count = self
             .subscriber_count
@@ -73,10 +73,12 @@ where
         count
     }
 
+    #[inline]
     pub(crate) fn load_queue(&self) -> arc_swap::Guard<Arc<VecDeque<SplaycastEntry<Item>>>> {
         self.queue.load()
     }
 
+    #[inline]
     pub(crate) fn swap_queue(
         &self,
         next: VecDeque<SplaycastEntry<Item>>,
@@ -89,48 +91,35 @@ where
         self.queue.swap(Arc::new(next))
     }
 
+    #[inline]
     pub fn register_waker(&self, handle: WakeHandle) {
         let message_id = handle.message_id;
         log::trace!("register waker at {message_id}");
-        self.wakers.push(Some(handle));
-        let previous = self
-            .wake_interest_sequence_number
-            .fetch_min(message_id, Ordering::SeqCst);
-        if message_id < previous {
-            self.waker.wake()
-        }
+        self.wakers.lock().expect("local mutex").push(handle);
+        self.waker.wake()
     }
 
-    pub fn pop_waker(&self) -> Option<WakeHandle> {
-        self.wakers.pop().unwrap_or_default()
-    }
-
-    pub fn load_and_reset_wake_interest(&self, context: &mut Context) -> Option<u64> {
-        let stored = self
-            .wake_interest_sequence_number
-            .fetch_max(u64::MAX, Ordering::SeqCst);
+    #[inline]
+    pub fn register_wake_interest(&self, context: &mut Context) {
         self.waker.register(context.waker());
-        if stored == u64::MAX {
-            None
-        } else {
-            Some(stored)
-        }
     }
 
-    pub fn iterate(self: &Arc<Self>) -> impl Iterator<Item = WakeHandle> {
-        self.wakers.push(None);
-        WakeIterator { shared: self.clone() }
+    #[inline]
+    pub fn swap_wakelist(&self, wakelist: Vec<WakeHandle>) -> Vec<WakeHandle> {
+        std::mem::replace(&mut *self.wakers.lock().expect("local mutex"), wakelist)
     }
 }
 
 struct WakeIterator<T> where T: Clone {
     shared: Arc<Shared<T>>,
+    i: usize,
 }
 impl<T: Clone> Iterator for WakeIterator<T> {
     type Item = WakeHandle;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        self.shared.pop_waker()
+        self.shared.wakers.lock().expect("local mutex").pop()
     }
 }
 
@@ -154,12 +143,14 @@ impl WakeHandle {
         }
     }
 
+    #[inline]
     pub fn wake(self) {
         self.this_handle_woke
-            .store(true, std::sync::atomic::Ordering::Release);
+            .store(true, Ordering::Release);
         self.waker.wake()
     }
 
+    #[inline]
     pub fn next_message_id(&self) -> u64 {
         self.message_id
     }
