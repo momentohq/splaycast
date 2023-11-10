@@ -131,7 +131,7 @@ where
         let shared = self.shared.clone();
         let mut staged_wakers = shared.swap_wakelist(std::mem::take(&mut self.staged_wakers).unwrap_or_default());
         for waker in staged_wakers.drain(..) {
-            if self.next_message_id < waker.next_message_id() {
+            if self.next_message_id <= waker.next_message_id() {
                 log::trace!("parking at {}", waker.next_message_id());
                 self.parked_wakers.push(waker);
                 continue; // this waker does not need to be woken. We parked it waiting new data

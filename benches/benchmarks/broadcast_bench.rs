@@ -7,8 +7,6 @@ use super::{Config, bench_multithread_async, BroadcastSender, quick_test};
 
 pub fn broadcast(group: &mut BenchmarkGroup<'_, WallTime>, configs: Vec<Config>) {
     for config in configs {
-        group.throughput(criterion::Throughput::Elements(config.subscribers as u64));
-
         bench_multithread_async(
             "broadcast",
             group,

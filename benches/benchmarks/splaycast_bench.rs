@@ -10,8 +10,6 @@ use super::{Config, BroadcastSender, bench_multithread_async, quick_test};
 
 pub fn splaycast(group: &mut BenchmarkGroup<'_, WallTime>, configs: Vec<Config>) {
     for config in configs {
-        group.throughput(criterion::Throughput::Elements(config.subscribers as u64));
-
         bench_multithread_async(
             "splaycast",
             group,
@@ -26,7 +24,7 @@ impl BroadcastSender<Arc<Semaphore>, splaycast::Receiver<Arc<Semaphore>>> for Be
     fn send(&self, item: Arc<Semaphore>) {
         match self.publish_handle.send(item) {
             Ok(_) => (),
-            Err(_) => panic!("send shoulf not fail"),
+            Err(_) => panic!("send should not fail"),
         }
     }
 
@@ -73,7 +71,7 @@ async fn receiver_loop(mut receiver: splaycast::Receiver<Arc<Semaphore>>) {
 
 fn only_splaycast(c: &mut Criterion) {
     let _ = env_logger::builder().parse_default_env().try_init();
-    splaycast(&mut c.benchmark_group("solo"), quick_test(6))
+    splaycast(&mut c.benchmark_group("solo"), quick_test(16))
 }
 
 criterion_group!(benches, only_splaycast);

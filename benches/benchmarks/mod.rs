@@ -1,4 +1,4 @@
-use std::{fmt::Display, sync::Arc, time::Instant};
+use std::{fmt::Display, sync::Arc, time::{Instant, Duration}};
 
 use criterion::{criterion_group, Criterion, BenchmarkGroup, measurement::WallTime, BenchmarkId};
 use futures::Future;
@@ -22,18 +22,22 @@ pub fn quick_test(threads: usize) -> Vec<Config> {
         Config {
             threads,
             subscribers: 1,
+            queue_depth: 1,
         },
         Config {
             threads,
             subscribers: 100,
+            queue_depth: 1,
         },
         Config {
             threads,
             subscribers: 1000,
+            queue_depth: 1,
         },
         Config {
             threads,
             subscribers: 40000,
+            queue_depth: 1,
         },
     ]
 }
@@ -42,6 +46,7 @@ pub fn long_test(threads: usize) -> Vec<Config> {
     (0..20).map(|i| Config {
         threads,
         subscribers: 2_usize.pow(i),
+        queue_depth: 1,
     }).collect()
 }
 
@@ -49,11 +54,12 @@ pub fn long_test(threads: usize) -> Vec<Config> {
 pub struct Config {
     threads: usize,
     subscribers: usize,
+    queue_depth: usize,
 }
 
 impl Display for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:.>2}/{:.>7}", self.threads, self.subscribers)
+        write!(f, "{:.>2}/{:.>7}/{}d", self.threads, self.subscribers, self.queue_depth)
     }
 }
 
@@ -69,6 +75,7 @@ fn bench_multithread_async<Receiver, Sender: BroadcastSender<Arc<Semaphore>, Rec
     get_sender: impl Fn() -> Sender + Copy,
     receiver_loop: impl Fn(Receiver) -> FnReceiverFuture + Copy,
 ) {
+    group.throughput(criterion::Throughput::Elements((config.subscribers * config.queue_depth) as u64));
     group.bench_function(BenchmarkId::new(name, config.clone()), |bencher| {
         let mut bencher = bencher.to_async(
             tokio::runtime::Builder::new_multi_thread()
@@ -85,17 +92,21 @@ fn bench_multithread_async<Receiver, Sender: BroadcastSender<Arc<Semaphore>, Rec
                 tokio::spawn(receiver_loop(receiver));
             }
 
+            // We're not testing subscribe instant - we're testing signaling rate
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
             let start = Instant::now();
             tokio::spawn(async move {
                 for _i in 0..iterations {
                     let semaphore = Arc::new(tokio::sync::Semaphore::new(0));
-                    let _ = sender.send(semaphore.clone());
+                    for _ in 0..config.queue_depth {
+                        let _ = sender.send(semaphore.clone());
+                    }
                     let _permit = semaphore
-                        .acquire_many(config.subscribers as u32)
+                        .acquire_many((config.subscribers * config.queue_depth) as u32)
                         .await
                         .expect("I should be able to acquire subscribers");
                 }
-                drop(sender);
             })
             .await
             .expect("it works");

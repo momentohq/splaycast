@@ -93,8 +93,7 @@ where
 
     #[inline]
     pub fn register_waker(&self, handle: WakeHandle) {
-        let message_id = handle.message_id;
-        log::trace!("register waker at {message_id}");
+        log::trace!("register waker at {}", handle.message_id);
         self.wakers.lock().expect("local mutex").push(handle);
         self.waker.wake()
     }
