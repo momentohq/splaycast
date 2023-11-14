@@ -81,18 +81,18 @@ where
             return Poll::Pending; // We haven't gotten anything new yet.
         }
         let shared_queue_snapshot = self.shared.load_queue();
-        if shared_queue_snapshot.is_empty() {
-            log::trace!("pending clean - empty snapshot");
-            self.next_message_id = 1;
-            self.mark_clean_and_register_for_wake(context);
-            return Poll::Pending; // We're registered for wake on delivery of new items at the next message id.
-        }
+        let tip_id = match shared_queue_snapshot.back() {
+            Some(back) => back.id,
+            None => {
+                log::trace!("pending clean - empty snapshot");
+                self.next_message_id = 1;
+                self.mark_clean_and_register_for_wake(context);
+                return Poll::Pending; // We're registered for wake on delivery of new items at the next message id.
+            }
+        };
 
         if self.next_message_id == 0 {
-            self.next_message_id = shared_queue_snapshot
-                .back()
-                .expect("I checked and this was not empty")
-                .id
+            self.next_message_id = tip_id
         }
 
         let index = match find(self.next_message_id, &shared_queue_snapshot) {
@@ -100,10 +100,6 @@ where
             Err(missing_at) => {
                 if missing_at == 0 {
                     // We fell off the buffer.
-                    let tip_id = shared_queue_snapshot
-                        .back()
-                        .expect("I checked and this was not empty")
-                        .id;
                     let lag = SplaycastMessage::Lagged {
                         count: (tip_id - self.next_message_id) as usize,
                     };
@@ -131,21 +127,25 @@ where
     }
 }
 
+/// Since the splaycast Engine increases sequence numbers one by one, we can exploit the
+/// array offset directly. This doesn't really matter for small buffers, but if you wanted
+/// a large buffer, O(log(buffer) * receiver_count) per message can start to add up for
+/// the simplicity of binary search.
 #[inline]
 fn find<Item>(id: u64, buffer: &VecDeque<SplaycastEntry<Item>>) -> Result<usize, usize> {
-    if buffer.is_empty() {
-        return Err(0);
-    }
-    // Try to optimize the case where the subscriber is close to the end
-    for i in 0..min(4, buffer.len()) {
-        let index = buffer.len() - 1 - i;
-        if buffer[index].id < id {
-            // the index is past this. This is just an early out for when a subscriber is caught up.
-            return Err(index + 1);
+    match buffer.front().map(SplaycastEntry::id) {
+        Some(front_id) => {
+            if id < front_id {
+                Err(0) // before the start - this is a lag
+            } else {
+                let offset = (id - front_id) as usize;
+                if buffer.len() <= offset {
+                    Err(buffer.len()) // hasn't happened yet - this will park the receiver
+                } else {
+                    Ok(offset) // hey look, ready to poll at offset
+                }
+            }
         }
-        if buffer[index].id == id {
-            return Ok(index);
-        }
+        None => Err(0), // empty buffer
     }
-    buffer.binary_search_by_key(&id, SplaycastEntry::id)
 }
