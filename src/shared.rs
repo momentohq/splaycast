@@ -13,6 +13,7 @@ use futures::task::AtomicWaker;
 
 use crate::SplaycastEntry;
 
+/// Shared, lock-free state for splaying out notifications to receiver streams from an upstream stream.
 pub struct Shared<Item>
 where
     Item: Clone,
@@ -49,26 +50,19 @@ where
 
     #[inline]
     pub fn subscriber_count(&self) -> usize {
-        self.subscriber_count
-            .load(std::sync::atomic::Ordering::Acquire)
+        self.subscriber_count.load(Ordering::Relaxed)
     }
 
     #[inline]
     pub fn increment_subscriber_count(&self) -> usize {
-        let count = self
-            .subscriber_count
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
-            + 1;
+        let count = self.subscriber_count.fetch_add(1, Ordering::Relaxed) + 1;
         log::trace!("incrementing subscriber count to {count}");
         count
     }
 
     #[inline]
     pub fn decrement_subscriber_count(&self) -> usize {
-        let count = self
-            .subscriber_count
-            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel)
-            - 1;
+        let count = self.subscriber_count.fetch_sub(1, Ordering::Relaxed) - 1;
         log::trace!("decrementing subscriber count to {count}");
         count
     }

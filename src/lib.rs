@@ -68,21 +68,16 @@ mod receiver;
 mod shared;
 mod splaycast;
 
-pub enum SplaycastMessage<T> {
-    /// Something from the upstream.
+/// Messages on a Splaycast Receiver are either an Entry or a Lagged. If you
+/// lag, you'll get a count of how many messages were skipped, and then you'll
+/// resume Entries from that point on.
+#[derive(Debug, PartialEq)]
+pub enum Message<T> {
+    /// The item is cloned from the upstream stream.
     Entry { item: T },
     /// From splaycast, this tells you how many messages you missed.
     /// Consume faster, publish slower, or possibly buffer more to reduce these!
     Lagged { count: usize },
-}
-
-impl<T> std::fmt::Debug for SplaycastMessage<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Entry { item: _ } => f.debug_struct("Entry").finish_non_exhaustive(),
-            Self::Lagged { count } => f.debug_struct("Lagged").field("count", count).finish(),
-        }
-    }
 }
 
 pub use engine::Engine;

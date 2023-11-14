@@ -7,9 +7,26 @@ use std::{
 
 use crate::{
     shared::{Shared, WakeHandle},
-    SplaycastEntry, SplaycastMessage,
+    Message, SplaycastEntry,
 };
 
+/// This is a cloned view of the upstream Stream you wrapped with a Splaycast.
+/// You receive [`crate::Message`]s on this stream. If you'd like to get back
+/// to your `Item` type, you can `.map()` this stream and handle `Message::Lagged`
+/// however it makes sense for your use.
+///
+/// Each `Receiver` moves independently and tracks its own state. When it is waiting
+/// for downstream room, e.g., in a tcp send buffer, it is not tracked within the
+/// Splaycast Engine. It is safe to have:
+/// * Many Receivers.
+/// * Few Receivers.
+/// * Slow Receivers.
+/// * Fast Receivers.
+/// * A mixture of fast and slow Receivers.
+///
+/// For few Receivers, the `tokio::sync::broadcast` may outperform Splaycast. But as
+/// Receiver count grows and as publish queue depth grows, Splaycast more gracefully
+/// loads up.
 pub struct Receiver<Item>
 where
     Item: Clone,
@@ -71,7 +88,7 @@ impl<Item> futures::Stream for Receiver<Item>
 where
     Item: Clone,
 {
-    type Item = SplaycastMessage<Item>;
+    type Item = Message<Item>;
 
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         log::trace!("poll {self:?}");
@@ -99,11 +116,10 @@ where
             Err(missing_at) => {
                 if missing_at == 0 {
                     // We fell off the buffer.
-                    let lag = SplaycastMessage::Lagged {
-                        count: (tip_id - self.next_message_id) as usize,
-                    };
+                    let count = (tip_id - self.next_message_id) as usize;
+                    let lag = Message::Lagged { count };
                     self.next_message_id = tip_id;
-                    log::trace!("ready lag - {lag:?}");
+                    log::trace!("ready lag - {count}");
                     return Poll::Ready(Some(lag));
                 } else if missing_at == shared_queue_snapshot.len() {
                     // We're caught up.
@@ -120,7 +136,7 @@ where
         let message_id = shared_queue_snapshot[index].id;
         log::trace!("ready at {message_id}");
         self.next_message_id = message_id + 1;
-        Poll::Ready(Some(SplaycastMessage::Entry {
+        Poll::Ready(Some(Message::Entry {
             item: shared_queue_snapshot[index].item.clone(),
         }))
     }

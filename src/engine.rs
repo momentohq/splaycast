@@ -11,6 +11,12 @@ use crate::{
     SplaycastEntry,
 };
 
+/// An Engine is an api-less plugin to an event loop. It is an adapter between an
+/// upstream Stream and downstream subscriber Streams.
+///
+/// Engine can do its work without blocking or synchronizing with the receivers.
+/// This is true because Engine uses the raw `poll` affordance of Future, which
+/// vends an &mut view of self.
 pub struct Engine<Upstream, Item>
 where
     Item: Clone,
@@ -34,13 +40,6 @@ where
     }
 }
 
-/// Am Engine is an api-less plugin to an event loop. It is an adapter between an
-/// upstream Stream and a downstream Stream.
-///
-/// Engine can do its work without blocking or synchronizing with the receivers.
-/// This is true because Engine uses the raw `poll` affordance of Future, which
-/// vends an &mut view of self. There is a low frequency lock that is acquired to grab the
-/// list of wakers waiting for a new message, but that's the extent of the locking.
 impl<Upstream, Item> Engine<Upstream, Item>
 where
     Upstream: futures::Stream<Item = Item> + Unpin,
