@@ -91,7 +91,9 @@ where
         };
 
         if self.next_message_id != start_message {
-            // todo: buffer the buffers
+            // TODO: buffer the buffers
+            // This new queue process is too expensive per message, but sharing will require some clever
+            // or optimistic arc swapping.
             let _to_buffer = self.shared.swap_queue(new_queue);
             (true, result)
         } else {

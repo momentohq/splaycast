@@ -14,8 +14,7 @@ pub mod splaycast_bench;
 fn compare_cast(c: &mut Criterion) {
     let mut group = c.benchmark_group("cast_comparison");
 
-    // for threads in [4, 8, 16, 32] {
-    for threads in [16] {
+    for threads in [4, 8, 16, 32] {
         let configs = long_test(threads);
         broadcast_bench::broadcast(&mut group, configs.clone());
         splaycast_bench::splaycast(&mut group, configs);
@@ -79,6 +78,7 @@ pub trait BroadcastSender<T, TReceiver> {
     fn subscribe(&self) -> TReceiver;
 }
 
+#[allow(clippy::expect_used)] // it is a benchmark, it's fine
 fn bench_multithread_async<
     Receiver,
     Sender: BroadcastSender<Arc<Semaphore>, Receiver> + Send + 'static,
@@ -117,7 +117,7 @@ fn bench_multithread_async<
                 for _i in 0..iterations {
                     let semaphore = Arc::new(tokio::sync::Semaphore::new(0));
                     for _ in 0..config.queue_depth {
-                        let _ = sender.send(semaphore.clone());
+                        sender.send(semaphore.clone());
                     }
                     let _permit = semaphore
                         .acquire_many((config.subscribers * config.queue_depth) as u32)

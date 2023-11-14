@@ -1,5 +1,4 @@
 use std::{
-    cmp::min,
     collections::VecDeque,
     pin::Pin,
     sync::{atomic::AtomicBool, Arc},

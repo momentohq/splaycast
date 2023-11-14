@@ -53,17 +53,14 @@ fn get_splaycast() -> BenchmarkStreamAdapter {
 }
 
 async fn receiver_loop(mut receiver: splaycast::Receiver<Arc<Semaphore>>) {
-    loop {
-        match receiver.next().await {
-            Some(message) => match message {
-                splaycast::SplaycastMessage::Entry { item } => {
-                    item.add_permits(1);
-                }
-                splaycast::SplaycastMessage::Lagged { count } => {
-                    eprintln!("lagged {count}")
-                }
-            },
-            None => break,
+    while let Some(message) = receiver.next().await {
+        match message {
+            splaycast::SplaycastMessage::Entry { item } => {
+                item.add_permits(1);
+            }
+            splaycast::SplaycastMessage::Lagged { count } => {
+                eprintln!("lagged {count}")
+            }
         }
     }
 }
