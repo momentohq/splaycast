@@ -6,7 +6,10 @@ use std::{
     task::{Context, Poll},
 };
 
-use crate::{shared::{Shared, WakeHandle}, SplaycastEntry};
+use crate::{
+    shared::{Shared, WakeHandle},
+    SplaycastEntry,
+};
 
 pub struct Engine<Upstream, Item>
 where
@@ -17,7 +20,6 @@ where
     // TODO: buffer the buffers
     shared: Arc<Shared<Item>>,
     parked_wakers: Vec<WakeHandle>,
-    staged_wakers: Option<Vec<WakeHandle>>,
 }
 
 impl<Upstream, Item> std::fmt::Debug for Engine<Upstream, Item>
@@ -46,11 +48,10 @@ where
 {
     pub(crate) fn new(upstream: Upstream, shared: Arc<Shared<Item>>) -> Self {
         Self {
-            next_message_id: 0,
+            next_message_id: 1,
             upstream,
             shared,
             parked_wakers: Default::default(),
-            staged_wakers: Default::default(),
         }
     }
 
@@ -129,8 +130,7 @@ where
 
         // Service downstreams
         let shared = self.shared.clone();
-        let mut staged_wakers = shared.swap_wakelist(std::mem::take(&mut self.staged_wakers).unwrap_or_default());
-        for waker in staged_wakers.drain(..) {
+        for waker in shared.swap_wakelist() {
             if self.next_message_id <= waker.next_message_id() {
                 log::trace!("parking at {}", waker.next_message_id());
                 self.parked_wakers.push(waker);
@@ -139,7 +139,6 @@ where
             log::trace!("waking at {}", waker.next_message_id());
             waker.wake();
         }
-        self.staged_wakers = Some(staged_wakers);
 
         // Awaiting an upstream message, for which we are already Pending, and we've woken what we need to
         log::trace!("parked pending");

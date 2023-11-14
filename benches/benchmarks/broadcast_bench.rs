@@ -3,7 +3,7 @@ use std::sync::Arc;
 use criterion::{criterion_group, measurement::WallTime, BenchmarkGroup, Criterion};
 use tokio::sync::{broadcast, Semaphore};
 
-use super::{Config, bench_multithread_async, BroadcastSender, quick_test};
+use super::{bench_multithread_async, quick_test, BroadcastSender, Config};
 
 pub fn broadcast(group: &mut BenchmarkGroup<'_, WallTime>, configs: Vec<Config>) {
     for config in configs {
@@ -47,10 +47,7 @@ async fn receiver_loop(mut receiver: broadcast::Receiver<Arc<Semaphore>>) {
 }
 
 fn only_broadcast(c: &mut Criterion) {
-    broadcast(
-        &mut c.benchmark_group("solo"),
-        quick_test(6),
-    )
+    broadcast(&mut c.benchmark_group("solo"), quick_test(6))
 }
 
 criterion_group!(benches, only_broadcast);

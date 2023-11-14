@@ -2,7 +2,7 @@ use std::{
     collections::VecDeque,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc, Mutex,
+        Arc,
     },
     task::Context,
 };
@@ -18,7 +18,7 @@ where
     Item: Clone,
 {
     subscriber_count: AtomicUsize,
-    wakers: Arc<Mutex<Vec<WakeHandle>>>,
+    wakers: Arc<SegQueue<WakeHandle>>,
     queue: Arc<ArcSwap<VecDeque<SplaycastEntry<Item>>>>,
     waker: AtomicWaker,
 }
@@ -94,7 +94,7 @@ where
     #[inline]
     pub fn register_waker(&self, handle: WakeHandle) {
         log::trace!("register waker at {}", handle.message_id);
-        self.wakers.lock().expect("local mutex").push(handle);
+        self.wakers.push(handle);
         self.waker.wake()
     }
 
@@ -104,21 +104,25 @@ where
     }
 
     #[inline]
-    pub fn swap_wakelist(&self, wakelist: Vec<WakeHandle>) -> Vec<WakeHandle> {
-        std::mem::replace(&mut *self.wakers.lock().expect("local mutex"), wakelist)
+    pub fn swap_wakelist(self: &Arc<Self>) -> impl Iterator<Item = WakeHandle> {
+        WakeIterator {
+            shared: self.clone(),
+        }
     }
 }
 
-struct WakeIterator<T> where T: Clone {
+struct WakeIterator<T>
+where
+    T: Clone,
+{
     shared: Arc<Shared<T>>,
-    i: usize,
 }
 impl<T: Clone> Iterator for WakeIterator<T> {
     type Item = WakeHandle;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        self.shared.wakers.lock().expect("local mutex").pop()
+        self.shared.wakers.pop()
     }
 }
 
@@ -144,8 +148,7 @@ impl WakeHandle {
 
     #[inline]
     pub fn wake(self) {
-        self.this_handle_woke
-            .store(true, Ordering::Release);
+        self.this_handle_woke.store(true, Ordering::Release);
         self.waker.wake()
     }
 

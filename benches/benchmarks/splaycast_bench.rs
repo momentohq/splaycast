@@ -3,24 +3,23 @@ use std::sync::Arc;
 use criterion::{criterion_group, measurement::WallTime, BenchmarkGroup, Criterion};
 use futures::StreamExt;
 use splaycast::Splaycast;
-use tokio::sync::{mpsc::{unbounded_channel, UnboundedSender}, Semaphore};
+use tokio::sync::{
+    mpsc::{unbounded_channel, UnboundedSender},
+    Semaphore,
+};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
-use super::{Config, BroadcastSender, bench_multithread_async, quick_test};
+use super::{bench_multithread_async, quick_test, BroadcastSender, Config};
 
 pub fn splaycast(group: &mut BenchmarkGroup<'_, WallTime>, configs: Vec<Config>) {
     for config in configs {
-        bench_multithread_async(
-            "splaycast",
-            group,
-            config,
-            get_splaycast,
-            receiver_loop,
-        );
+        bench_multithread_async("splaycast", group, config, get_splaycast, receiver_loop);
     }
 }
 
-impl BroadcastSender<Arc<Semaphore>, splaycast::Receiver<Arc<Semaphore>>> for BenchmarkStreamAdapter {
+impl BroadcastSender<Arc<Semaphore>, splaycast::Receiver<Arc<Semaphore>>>
+    for BenchmarkStreamAdapter
+{
     fn send(&self, item: Arc<Semaphore>) {
         match self.publish_handle.send(item) {
             Ok(_) => (),

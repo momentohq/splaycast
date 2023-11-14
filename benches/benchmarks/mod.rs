@@ -1,6 +1,10 @@
-use std::{fmt::Display, sync::Arc, time::{Instant, Duration}};
+use std::{
+    fmt::Display,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
-use criterion::{criterion_group, Criterion, BenchmarkGroup, measurement::WallTime, BenchmarkId};
+use criterion::{criterion_group, measurement::WallTime, BenchmarkGroup, BenchmarkId, Criterion};
 use futures::Future;
 use tokio::sync::Semaphore;
 
@@ -10,7 +14,8 @@ pub mod splaycast_bench;
 fn compare_cast(c: &mut Criterion) {
     let mut group = c.benchmark_group("cast_comparison");
 
-    for threads in [4, 8, 16, 32] {
+    // for threads in [4, 8, 16, 32] {
+    for threads in [16] {
         let configs = long_test(threads);
         broadcast_bench::broadcast(&mut group, configs.clone());
         splaycast_bench::splaycast(&mut group, configs);
@@ -43,11 +48,13 @@ pub fn quick_test(threads: usize) -> Vec<Config> {
 }
 
 pub fn long_test(threads: usize) -> Vec<Config> {
-    (0..20).map(|i| Config {
-        threads,
-        subscribers: 2_usize.pow(i),
-        queue_depth: 1,
-    }).collect()
+    (0..20)
+        .map(|i| Config {
+            threads,
+            subscribers: 2_usize.pow(i),
+            queue_depth: 4,
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -59,7 +66,11 @@ pub struct Config {
 
 impl Display for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:.>2}/{:.>7}/{}d", self.threads, self.subscribers, self.queue_depth)
+        write!(
+            f,
+            "{:.>2}/{:.>7}/{}d",
+            self.threads, self.subscribers, self.queue_depth
+        )
     }
 }
 
@@ -68,14 +79,20 @@ pub trait BroadcastSender<T, TReceiver> {
     fn subscribe(&self) -> TReceiver;
 }
 
-fn bench_multithread_async<Receiver, Sender: BroadcastSender<Arc<Semaphore>, Receiver> + Send + 'static, FnReceiverFuture: Future<Output = ()> + Send + 'static>(
+fn bench_multithread_async<
+    Receiver,
+    Sender: BroadcastSender<Arc<Semaphore>, Receiver> + Send + 'static,
+    FnReceiverFuture: Future<Output = ()> + Send + 'static,
+>(
     name: &'static str,
     group: &mut BenchmarkGroup<'_, WallTime>,
     config: Config,
     get_sender: impl Fn() -> Sender + Copy,
     receiver_loop: impl Fn(Receiver) -> FnReceiverFuture + Copy,
 ) {
-    group.throughput(criterion::Throughput::Elements((config.subscribers * config.queue_depth) as u64));
+    group.throughput(criterion::Throughput::Elements(
+        (config.subscribers * config.queue_depth) as u64,
+    ));
     group.bench_function(BenchmarkId::new(name, config.clone()), |bencher| {
         let mut bencher = bencher.to_async(
             tokio::runtime::Builder::new_multi_thread()
@@ -115,6 +132,5 @@ fn bench_multithread_async<Receiver, Sender: BroadcastSender<Arc<Semaphore>, Rec
         });
     });
 }
-
 
 criterion_group!(comparison, compare_cast);

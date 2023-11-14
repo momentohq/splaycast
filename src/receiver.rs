@@ -83,6 +83,7 @@ where
         let shared_queue_snapshot = self.shared.load_queue();
         if shared_queue_snapshot.is_empty() {
             log::trace!("pending clean - empty snapshot");
+            self.next_message_id = 1;
             self.mark_clean_and_register_for_wake(context);
             return Poll::Pending; // We're registered for wake on delivery of new items at the next message id.
         }

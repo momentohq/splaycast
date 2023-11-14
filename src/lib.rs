@@ -7,7 +7,7 @@
 //! Splaycast does not explicitly synchronize for publishing from upstream or
 //! for vending to downstream receiver streams. A normal `channel()` usually
 //! only has 2 main components - a sender and a receiver. `Splaycast` has 3:
-//! 1. The [`Splaycast`] itself. This is how you subscribe new receivers.
+//! 1. The [`Splaycast`] itself. This is how you subscribe new receivers. It is not a sender, and you cannot send to this.
 //! 2. The [`splaycast::Engine`]. This drives the streams and notifies receivers. You spawn this on your runtime.
 //! 3. The [`splaycast::Receiver`]. It's just a stream.
 //!
@@ -18,13 +18,16 @@
 //! # Feature Flags
 //!
 
-mod shared;
-mod splaycast;
 mod engine;
 mod receiver;
+mod shared;
+mod splaycast;
 
 pub enum SplaycastMessage<T> {
+    /// Something from the upstream.
     Entry { item: T },
+    /// From splaycast, this tells you how many messages you missed.
+    /// Consume faster, publish slower, or possibly buffer more to reduce these!
     Lagged { count: usize },
 }
 
@@ -37,11 +40,19 @@ impl<T> std::fmt::Debug for SplaycastMessage<T> {
     }
 }
 
-pub use splaycast::Splaycast;
 pub use engine::Engine;
 pub use receiver::Receiver;
+pub use splaycast::Splaycast;
 
-pub fn wrap<T, Upstream>(upstream: Upstream, buffer_size: usize) -> (Engine<Upstream, T>, Splaycast<T>)
+/// Wrap a stream with a Splaycast - a broadcast channel for streams.
+///
+/// This function returns you a tuple:
+/// * An Engine you need to spawn on your async runtime.
+/// * A Splaycast handle to which you may `subscribe()`.
+pub fn wrap<T, Upstream>(
+    upstream: Upstream,
+    buffer_size: usize,
+) -> (Engine<Upstream, T>, Splaycast<T>)
 where
     T: Clone + Send + Unpin,
     Upstream: futures::Stream<Item = T> + Unpin,

@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use crate::{
-    shared::Shared, engine::Engine, receiver::Receiver,
-};
+use crate::{engine::Engine, receiver::Receiver, shared::Shared};
 
 #[derive(Debug)]
 pub struct Splaycast<Item>
@@ -17,7 +15,7 @@ where
     Item: Unpin + Clone + Send,
 {
     // Wire a splaying channel adapter to an upstream stream.
-    pub fn new<Upstream>(
+    pub(crate) fn new<Upstream>(
         upstream: Upstream,
         buffer_size: usize,
     ) -> (Engine<Upstream, Item>, Self)
