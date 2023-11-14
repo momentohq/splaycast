@@ -1,7 +1,10 @@
 use std::{
     collections::VecDeque,
     pin::Pin,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     task::{Context, Poll},
 };
 
@@ -43,10 +46,7 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SplaycastReceiver")
             .field("next", &self.next_message_id)
-            .field(
-                "dirty",
-                &self.dirty.load(std::sync::atomic::Ordering::Relaxed),
-            )
+            .field("dirty", &self.dirty.load(Ordering::Relaxed))
             .finish()
     }
 }
@@ -65,8 +65,7 @@ where
     }
 
     fn mark_clean_and_register_for_wake(&mut self, context: &mut Context<'_>) {
-        self.dirty
-            .store(false, std::sync::atomic::Ordering::Release);
+        self.dirty.store(false, Ordering::Release);
         self.shared.register_waker(WakeHandle::new(
             self.next_message_id,
             context.waker().clone(),
@@ -92,7 +91,11 @@ where
 
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         log::trace!("poll {self:?}");
-        if !self.dirty.load(std::sync::atomic::Ordering::Acquire) {
+        if self.shared.is_dead() {
+            return Poll::Ready(None); // It's dead
+        }
+
+        if !self.dirty.load(Ordering::Acquire) {
             log::trace!("pending clean");
             return Poll::Pending; // We haven't gotten anything new yet.
         }
@@ -162,5 +165,12 @@ fn find<Item>(id: u64, buffer: &VecDeque<SplaycastEntry<Item>>) -> Result<usize,
             }
         }
         None => Err(0), // empty buffer
+    }
+}
+
+impl<T: Clone> Receiver<T> {
+    #[doc(hidden)] // This is a test tool
+    pub fn is_parked(&self) -> bool {
+        !self.dirty.load(Ordering::Acquire)
     }
 }

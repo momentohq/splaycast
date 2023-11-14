@@ -14,14 +14,12 @@ use futures::task::AtomicWaker;
 use crate::SplaycastEntry;
 
 /// Shared, lock-free state for splaying out notifications to receiver streams from an upstream stream.
-pub struct Shared<Item>
-where
-    Item: Clone,
-{
+pub struct Shared<Item> {
     subscriber_count: AtomicUsize,
     wakers: Arc<SegQueue<WakeHandle>>,
     queue: Arc<ArcSwap<VecDeque<SplaycastEntry<Item>>>>,
     waker: AtomicWaker,
+    is_dead: AtomicBool,
 }
 
 impl<Item> std::fmt::Debug for Shared<Item>
@@ -45,7 +43,17 @@ where
             wakers: Default::default(),
             queue: Arc::new(ArcSwap::from_pointee(VecDeque::with_capacity(buffer_size))),
             waker: Default::default(),
+            is_dead: Default::default(),
         }
+    }
+
+    pub fn set_dead(&self) {
+        self.is_dead.store(true, Ordering::Release);
+        self.waker.wake(); // Make sure the Engine runs promptly
+    }
+
+    pub fn is_dead(&self) -> bool {
+        self.is_dead.load(Ordering::Acquire)
     }
 
     #[inline]
@@ -88,6 +96,10 @@ where
     #[inline]
     pub fn register_waker(&self, handle: WakeHandle) {
         log::trace!("register waker at {}", handle.message_id);
+        if self.is_dead() {
+            handle.wake();
+            return;
+        }
         self.wakers.push(handle);
         self.waker.wake()
     }
@@ -98,7 +110,7 @@ where
     }
 
     #[inline]
-    pub fn swap_wakelist(self: &Arc<Self>) -> impl Iterator<Item = WakeHandle> {
+    pub fn drain_wakelist(self: &Arc<Self>) -> impl Iterator<Item = WakeHandle> {
         WakeIterator {
             shared: self.clone(),
         }

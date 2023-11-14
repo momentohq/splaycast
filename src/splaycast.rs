@@ -45,3 +45,9 @@ where
         self.shared.subscriber_count()
     }
 }
+
+impl<T: Clone> Drop for Splaycast<T> {
+    fn drop(&mut self) {
+        self.shared.set_dead()
+    }
+}

@@ -20,6 +20,10 @@
 //! 2. The [`splaycast::Receiver`]. It's just a stream. You use it or compose it how you need to.
 //! 3. The [`Splaycast`] itself. This is how you subscribe new receivers. It is not a sender, and you cannot send to it.
 //!
+//! If you drop [1] the Upstream Stream, [2] the Splaycast, or [3] the Engine, the
+//! splaycast is terminated and everything is dropped. Your Receivers *_will receive
+//! prompt notification_* of the termination of any critical upstream resource.
+//!
 //! ## Engine
 //! The `splaycast::Engine` is a broadcast bridge. It is a raw `Future` which does
 //! its work inside of `poll()`. By doing so, it has `&mut self`, permitting the

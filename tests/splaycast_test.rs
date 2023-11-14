@@ -249,3 +249,192 @@ fn slow_subscriber() {
         "Should be all caught up with the slow subscriber"
     );
 }
+
+#[test]
+fn drop_splaycast() {
+    let (_publish_handle, splaycast, mut engine) = get_splaycast();
+    let mut parked_subscriber: splaycast::Receiver<usize> = splaycast.subscribe();
+    assert_eq!(Poll::Pending, poll_next(&mut parked_subscriber),);
+    assert_eq!(
+        Poll::Pending,
+        poll(&mut engine),
+        "move subscriber to park list"
+    );
+    assert!(
+        parked_subscriber.is_parked(),
+        "subscriber is in the park list"
+    );
+
+    let mut wake_queue_subscriber: splaycast::Receiver<usize> = splaycast.subscribe();
+    assert_eq!(
+        Poll::Pending,
+        poll_next(&mut wake_queue_subscriber),
+        "this subscriber is only in the wake queue"
+    );
+
+    // Dropping the Splaycast kills the splaycast.
+    drop(splaycast);
+    assert!(
+        parked_subscriber.is_parked(),
+        "receivers get promptly notified by the Engine, but not until the Engine runs"
+    );
+
+    assert_eq!(
+        Poll::Ready(()),
+        poll(&mut engine),
+        "Engine terminates promptly upon being set dead"
+    );
+
+    assert!(
+        !parked_subscriber.is_parked(),
+        "receivers are immediately woken when the splaycast is killed"
+    );
+
+    assert_eq!(
+        Poll::Ready(None),
+        poll_next(&mut parked_subscriber),
+        "subscriber promptly receives an end-of-stream"
+    );
+    assert_eq!(
+        Poll::Ready(None),
+        poll_next(&mut wake_queue_subscriber),
+        "subscriber promptly receives an end-of-stream"
+    );
+}
+
+#[test]
+fn drop_engine() {
+    let (_publish_handle, splaycast, mut engine) = get_splaycast();
+    let mut parked_subscriber: splaycast::Receiver<usize> = splaycast.subscribe();
+    assert_eq!(Poll::Pending, poll_next(&mut parked_subscriber),);
+    assert_eq!(
+        Poll::Pending,
+        poll(&mut engine),
+        "move subscriber to park list"
+    );
+    assert!(
+        parked_subscriber.is_parked(),
+        "subscriber is in the park list"
+    );
+
+    let mut wake_queue_subscriber: splaycast::Receiver<usize> = splaycast.subscribe();
+    assert_eq!(
+        Poll::Pending,
+        poll_next(&mut wake_queue_subscriber),
+        "this subscriber is only in the wake queue"
+    );
+
+    // Dropping the splaycast Engine kills the splaycast. Probably dropping Engine is a mistake, but it should still not leak subscribers!!!
+    drop(engine);
+
+    assert!(
+        !parked_subscriber.is_parked(),
+        "receivers are immediately woken when the engine is killed"
+    );
+
+    assert_eq!(
+        Poll::Ready(None),
+        poll_next(&mut parked_subscriber),
+        "subscriber promptly receives an end-of-stream"
+    );
+    assert_eq!(
+        Poll::Ready(None),
+        poll_next(&mut wake_queue_subscriber),
+        "subscriber promptly receives an end-of-stream"
+    );
+}
+
+#[test]
+fn drop_upstream() {
+    let (publish_handle, splaycast, mut engine) = get_splaycast();
+    let mut parked_subscriber: splaycast::Receiver<usize> = splaycast.subscribe();
+    assert_eq!(Poll::Pending, poll_next(&mut parked_subscriber),);
+    assert_eq!(
+        Poll::Pending,
+        poll(&mut engine),
+        "move subscriber to park list"
+    );
+    assert!(
+        parked_subscriber.is_parked(),
+        "subscriber is in the park list"
+    );
+
+    let mut wake_queue_subscriber: splaycast::Receiver<usize> = splaycast.subscribe();
+    assert_eq!(
+        Poll::Pending,
+        poll_next(&mut wake_queue_subscriber),
+        "this subscriber is only in the wake queue"
+    );
+
+    // Dropping the publish handle for a typical Stream implementation should wake downstreams.
+    // When Engine is awoken with a dead upstream, it kills the splaycast. The subscribers should all be promptly notified and all resources released.
+    drop(publish_handle);
+
+    assert!(
+        parked_subscriber.is_parked(),
+        "receivers do not know immediately that the upstream died"
+    );
+
+    assert_eq!(
+        Poll::Ready(()),
+        poll(&mut engine),
+        "Engine sees the upstream is dead and wakes subscribers before releasing itself"
+    );
+
+    assert!(
+        !parked_subscriber.is_parked(),
+        "receivers are immediately woken when the engine dies from an upstream termination"
+    );
+
+    assert_eq!(
+        Poll::Ready(None),
+        poll_next(&mut parked_subscriber),
+        "subscriber promptly receives an end-of-stream"
+    );
+    assert_eq!(
+        Poll::Ready(None),
+        poll_next(&mut wake_queue_subscriber),
+        "subscriber promptly receives an end-of-stream"
+    );
+}
+
+#[allow(clippy::expect_used)] // i mean, it's a test
+#[test]
+fn drop_downstreams() {
+    let (publish_handle, splaycast, mut engine) = get_splaycast();
+    let mut parked_subscriber: splaycast::Receiver<usize> = splaycast.subscribe();
+    assert_eq!(Poll::Pending, poll_next(&mut parked_subscriber),);
+    assert_eq!(
+        Poll::Pending,
+        poll(&mut engine),
+        "move subscriber to park list"
+    );
+    assert!(
+        parked_subscriber.is_parked(),
+        "subscriber is in the park list"
+    );
+
+    let mut wake_queue_subscriber: splaycast::Receiver<usize> = splaycast.subscribe();
+    assert_eq!(
+        Poll::Pending,
+        poll_next(&mut wake_queue_subscriber),
+        "this subscriber is only in the wake queue"
+    );
+
+    // Dropping the subscribers does not kill the splaycast, and it can still continue to work
+    drop(parked_subscriber);
+    drop(wake_queue_subscriber);
+
+    publish_handle.send(4).expect("unbounded send");
+    assert_eq!(
+        Poll::Pending,
+        poll(&mut engine),
+        "Engine receives a message and goes to wake the subscribers who no longer exist"
+    );
+    assert_eq!(0, splaycast.subscriber_count());
+    assert_eq!(
+        Poll::Pending,
+        poll(&mut engine),
+        "Engine is still happily pending"
+    );
+}
