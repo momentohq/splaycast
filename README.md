@@ -24,4 +24,14 @@ Splaycast versus 43.6ms on `tokio::sync::broadcast`. These tests were done
 on a 64gb M1 laptop, so while relative differences are relevant, you should
 be skeptical of absolute measurements.
 
-[pictures to be added]
+![comparison with broadcast](./.images/comparison.svg)
+With queue depth=4, "input size" along X is 4 times subscriber count. You can
+see that as subscriber counts grow, the behavior of Splaycast is linear with
+subscribers, but with a much lower constant factor than broadcast.
+
+![zoomed in comparison with broadcast](./.images/zoomed_in_comparison.svg)
+If we look closer at the bottom of the chart we can see the behavior more explicitly.
+Here with the same queue depth=4 and "input size" means 4x subscriber count, you can
+see that at or below 256 subscribers it doesn't make much of a difference which Stream
+splitter you use. But at 512 and greater subscriber counts, the difference is
+increasingly pronounced.
