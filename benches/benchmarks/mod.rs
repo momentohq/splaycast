@@ -14,8 +14,7 @@ pub mod splaycast_bench;
 fn compare_cast(c: &mut Criterion) {
     let mut group = c.benchmark_group("cast_comparison");
 
-    // for threads in [4, 8, 16, 32] {
-    for threads in [16] {
+    for threads in [4, 8, 16, 32] {
         let configs = long_test(threads);
         broadcast_bench::broadcast(&mut group, configs.clone());
         splaycast_bench::splaycast(&mut group, configs);
