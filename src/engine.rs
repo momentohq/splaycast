@@ -1,5 +1,6 @@
 use futures::Stream;
 use std::{
+    cmp::min,
     collections::VecDeque,
     pin::{pin, Pin},
     sync::Arc,
@@ -23,6 +24,7 @@ pub struct Engine<Upstream, Item: Clone> {
     // TODO: buffer the buffers
     shared: Arc<Shared<Item>>,
     parked_wakers: Vec<WakeHandle>,
+    pending_wake: Option<Vec<WakeHandle>>,
 }
 
 impl<Upstream, Item> std::fmt::Debug for Engine<Upstream, Item>
@@ -48,6 +50,7 @@ where
             upstream,
             shared,
             parked_wakers: Default::default(),
+            pending_wake: None,
         }
     }
 
@@ -128,8 +131,27 @@ where
 
         if dirty {
             log::trace!("notifying parked: {}", self.parked_wakers.len());
-            for waker in std::mem::replace(&mut self.parked_wakers, Vec::with_capacity(16)) {
+            self.pending_wake = match std::mem::take(&mut self.pending_wake) {
+                Some(mut existing) => {
+                    existing.append(&mut self.parked_wakers);
+                    Some(existing)
+                }
+                None => Some(std::mem::replace(
+                    &mut self.parked_wakers,
+                    Vec::with_capacity(16),
+                )),
+            };
+        }
+
+        if let Some(ref mut pending) = self.pending_wake {
+            let limit = min(pending.len(), 8192); // don't hold poll for a long time
+            for waker in pending.drain((pending.len() - limit)..) {
                 waker.wake()
+            }
+            if pending.is_empty() {
+                self.pending_wake = None;
+            } else {
+                context.waker().wake_by_ref(); // spin back around in here
             }
         }
 
