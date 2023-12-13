@@ -1,9 +1,9 @@
 //! A specialized version of Broadcast, for 1 Stream in -> many Streams out.
 //!
 //! # About
-//! [`Splaycast`] is a Broadcast-adjacent tool for connecting streams. It has
-//! only 1 way of publishing - it greedily consumes the upstream and tries to
-//! send to all of the downstreams as quickly as possible.
+//! [`Splaycast`] is a Broadcast-adjacent tool for connecting streams. It
+//! greedily consumes the upstream and tries to send to all of the
+//! downstreams as quickly as possible.
 //!
 //! This project does not directly use `unsafe` code. Reputable dependencies
 //! like arc-swap and crossbeam-queue are used here, which internally _do_ have
@@ -61,6 +61,21 @@
 //! hook up a new Receiver.
 //!
 //! # Examples
+//! The most basic usage of splaycast which approximates a normal broadcast channel:
+//! ```
+//! # use futures::StreamExt;
+//! # use splaycast::Message;
+//! # tokio_test::block_on(async {
+//! let (sender, engine, splaycast) = splaycast::channel(128);
+//! tokio::spawn(engine);
+//!
+//! let mut receiver = splaycast.subscribe();
+//! sender.send("hello");
+//!
+//! let hello = receiver.next().await;
+//! assert_eq!(Some(Message::Entry { item: "hello" }), hello);
+//! # })
+//! ```
 //!
 //! Some basic examples can be found under `src/benches`.
 //!
@@ -69,6 +84,7 @@
 
 mod engine;
 mod receiver;
+mod sender;
 mod shared;
 mod splaycast;
 
@@ -86,6 +102,7 @@ pub enum Message<T> {
 
 pub use engine::Engine;
 pub use receiver::Receiver;
+pub use sender::{Sender, SenderStream};
 pub use splaycast::Splaycast;
 
 /// Wrap a stream with a Splaycast - a broadcast channel for streams.
@@ -111,6 +128,37 @@ where
     Upstream: futures::Stream<Item = T> + Unpin,
 {
     Splaycast::new(upstream, buffer_size)
+}
+
+/// Get a channel to splay out to streaming receivers.
+///
+/// A channel has send(item), while a wrap(upstream)'d splaycast has no
+/// adapters before directly consuming a stream.
+///
+/// If you have a stream you want to duplicate, wrap() it. If you have
+/// a collection or some computed value that you want to duplicate, use
+/// a channel().
+/// ```
+/// # use futures::StreamExt;
+/// # use splaycast::Message;
+/// # tokio_test::block_on(async {
+/// let (sender, engine, splaycast) = splaycast::channel(128);
+/// tokio::spawn(engine);
+///
+/// let mut receiver = splaycast.subscribe();
+/// sender.send("hello");
+///
+/// let hello = receiver.next().await;
+/// assert_eq!(Some(Message::Entry { item: "hello" }), hello);
+/// # })
+/// ```
+pub fn channel<T>(buffer_size: usize) -> (Sender<T>, Engine<SenderStream<T>, T>, Splaycast<T>)
+where
+    T: Clone + Send + Unpin,
+{
+    let (sender, stream) = Sender::new(buffer_size);
+    let (engine, splaycast) = Splaycast::new(stream, buffer_size);
+    (sender, engine, splaycast)
 }
 
 #[derive(Clone, Debug)]

@@ -2,12 +2,8 @@ use std::sync::Arc;
 
 use criterion::{criterion_group, measurement::WallTime, BenchmarkGroup, Criterion};
 use futures::StreamExt;
-use splaycast::Splaycast;
-use tokio::sync::{
-    mpsc::{unbounded_channel, UnboundedSender},
-    Semaphore,
-};
-use tokio_stream::wrappers::UnboundedReceiverStream;
+use splaycast::{Sender, Splaycast};
+use tokio::sync::Semaphore;
 
 use super::{bench_multithread_async, quick_test, BroadcastSender, Config};
 
@@ -21,7 +17,7 @@ impl BroadcastSender<Arc<Semaphore>, splaycast::Receiver<Arc<Semaphore>>>
     for BenchmarkStreamAdapter
 {
     fn send(&self, item: Arc<Semaphore>) {
-        match self.publish_handle.send(item) {
+        match self.sender.send(item) {
             Ok(_) => (),
             Err(_) => panic!("send should not fail"),
         }
@@ -32,24 +28,22 @@ impl BroadcastSender<Arc<Semaphore>, splaycast::Receiver<Arc<Semaphore>>>
     }
 }
 
-/// Splaycast is a direct stream adapter - so we have to plug in a stream
+/// the benchmark uses the sender and the splaycast handle in the same place, so let's tie them together for convenience
+///
+/// Note that splaycast is intended to be used as a futures::Stream plugin. This benchmark is oriented toward a "channel"
+/// rather than a "stream." This gives a pessimistic view of a splaycast used with a Stream upstream.
 struct BenchmarkStreamAdapter {
     splaycast: Splaycast<Arc<Semaphore>>,
-    publish_handle: UnboundedSender<Arc<Semaphore>>,
+    sender: Sender<Arc<Semaphore>>,
 }
 
 fn get_splaycast() -> BenchmarkStreamAdapter {
-    let (publish_handle, upstream) = unbounded_channel::<Arc<tokio::sync::Semaphore>>();
-    let upstream = UnboundedReceiverStream::new(upstream); // multiple layers of wrapping here. It's best if you have an inbound native stream, like from Tonic
-    let (engine, splaycast) = splaycast::wrap(upstream, 16);
+    let (sender, engine, splaycast) = splaycast::channel(16);
 
     // This is the 3rd component of a splaycast, beyond the idea of a sender and a receiver.
     tokio::spawn(engine);
 
-    BenchmarkStreamAdapter {
-        splaycast,
-        publish_handle,
-    }
+    BenchmarkStreamAdapter { sender, splaycast }
 }
 
 async fn receiver_loop(mut receiver: splaycast::Receiver<Arc<Semaphore>>) {

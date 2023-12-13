@@ -9,7 +9,7 @@ use futures::Future;
 use tokio::sync::Semaphore;
 
 pub mod broadcast_bench;
-pub mod splaycast_bench;
+pub mod splaycast_channel_bench;
 
 fn compare_cast(c: &mut Criterion) {
     let mut group = c.benchmark_group("cast_comparison");
@@ -17,7 +17,7 @@ fn compare_cast(c: &mut Criterion) {
     for threads in [4, 8, 16, 32] {
         let configs = long_test(threads);
         broadcast_bench::broadcast(&mut group, configs.clone());
-        splaycast_bench::splaycast(&mut group, configs);
+        splaycast_channel_bench::splaycast(&mut group, configs);
     }
 }
 
