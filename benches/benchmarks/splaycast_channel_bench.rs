@@ -16,7 +16,7 @@ pub fn splaycast(group: &mut BenchmarkGroup<'_, WallTime>, configs: Vec<Config>)
 impl BroadcastSender<Arc<Semaphore>, splaycast::Receiver<Arc<Semaphore>>>
     for BenchmarkStreamAdapter
 {
-    fn send(&self, item: Arc<Semaphore>) {
+    fn send(&mut self, item: Arc<Semaphore>) {
         match self.sender.send(item) {
             Ok(_) => (),
             Err(_) => panic!("send should not fail"),

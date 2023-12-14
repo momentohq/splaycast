@@ -74,7 +74,7 @@ impl Display for Config {
 }
 
 pub trait BroadcastSender<T, TReceiver> {
-    fn send(&self, item: T);
+    fn send(&mut self, item: T);
     fn subscribe(&self) -> TReceiver;
 }
 
@@ -102,7 +102,7 @@ fn bench_multithread_async<
                 .expect("can make a tokio runtime"),
         );
         bencher.iter_custom(|iterations| async move {
-            let sender = get_sender();
+            let mut sender = get_sender();
 
             for _ in 0..config.subscribers {
                 let receiver = sender.subscribe();

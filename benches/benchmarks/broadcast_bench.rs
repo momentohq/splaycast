@@ -18,8 +18,8 @@ pub fn broadcast(group: &mut BenchmarkGroup<'_, WallTime>, configs: Vec<Config>)
 }
 
 impl<T> BroadcastSender<T, broadcast::Receiver<T>> for broadcast::Sender<T> {
-    fn send(&self, item: T) {
-        match self.send(item) {
+    fn send(&mut self, item: T) {
+        match broadcast::Sender::send(self, item) {
             Ok(_) => (),
             Err(_) => panic!("send should work"),
         }

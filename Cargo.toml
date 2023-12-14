@@ -18,9 +18,10 @@ harness = false
 
 [dependencies]
 arc-swap        = { version = "1.6" }
+crossbeam-queue = { version = "0.3" }
 futures         = { version = "0.3" }
 log             = { version = "0.4" }
-crossbeam-queue = { version = "0.3" }
+rtrb            = { version = "0.3" } # Used for channel() versions of splaycast. Unused for stream wrap().
 
 [dev-dependencies]
 criterion    = { version = "0.5", features = ["async_tokio"] }

@@ -130,7 +130,7 @@ where
     Splaycast::new(upstream, buffer_size)
 }
 
-/// Get a channel to splay out to streaming receivers.
+/// Get an spmc channel to splay out to streaming receivers.
 ///
 /// A channel has send(item), while a wrap(upstream)'d splaycast has no
 /// adapters before directly consuming a stream.
@@ -138,11 +138,13 @@ where
 /// If you have a stream you want to duplicate, wrap() it. If you have
 /// a collection or some computed value that you want to duplicate, use
 /// a channel().
+///
+/// This is spmc to mirror wrap()'s Stream paradigm, which is also spmc.
 /// ```
 /// # use futures::StreamExt;
 /// # use splaycast::Message;
 /// # tokio_test::block_on(async {
-/// let (sender, engine, splaycast) = splaycast::channel(128);
+/// let (mut sender, engine, splaycast) = splaycast::channel(128);
 /// tokio::spawn(engine);
 ///
 /// let mut receiver = splaycast.subscribe();
