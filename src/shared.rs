@@ -13,13 +13,17 @@ use futures::task::AtomicWaker;
 
 use crate::SplaycastEntry;
 
+const WAKER_QUEUES: usize = 2;
+const WAKER_MASK: usize = 0b0001;
+
 /// Shared, lock-free state for splaying out notifications to receiver streams from an upstream stream.
 pub struct Shared<Item> {
     subscriber_count: AtomicUsize,
-    wakers: Arc<SegQueue<WakeHandle>>,
+    wakers: Arc<[SegQueue<WakeHandle>; WAKER_QUEUES]>,
     queue: Arc<ArcSwap<VecDeque<SplaycastEntry<Item>>>>,
     waker: AtomicWaker,
     is_dead: AtomicBool,
+    waker_clock: AtomicUsize,
 }
 
 impl<Item> std::fmt::Debug for Shared<Item>
@@ -44,6 +48,7 @@ where
             queue: Arc::new(ArcSwap::from_pointee(VecDeque::with_capacity(buffer_size))),
             waker: Default::default(),
             is_dead: Default::default(),
+            waker_clock: Default::default(),
         }
     }
 
@@ -94,13 +99,19 @@ where
     }
 
     #[inline]
+    fn wakers(&self) -> &SegQueue<WakeHandle> {
+        let slot = WAKER_MASK & self.waker_clock.fetch_add(1, Ordering::Relaxed);
+        &self.wakers[slot]
+    }
+
+    #[inline]
     pub fn register_waker(&self, handle: WakeHandle) {
         log::trace!("register waker at {}", handle.message_id);
         if self.is_dead() {
             handle.wake();
             return;
         }
-        self.wakers.push(handle);
+        self.wakers().push(handle);
         self.waker.wake()
     }
 
@@ -113,6 +124,7 @@ where
     pub fn drain_wakelist(self: &Arc<Self>) -> impl Iterator<Item = WakeHandle> {
         WakeIterator {
             shared: self.clone(),
+            i: 0,
         }
     }
 }
@@ -122,13 +134,23 @@ where
     T: Clone,
 {
     shared: Arc<Shared<T>>,
+    i: usize,
 }
 impl<T: Clone> Iterator for WakeIterator<T> {
     type Item = WakeHandle;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        self.shared.wakers.pop()
+        loop {
+            let next = self.shared.wakers[self.i].pop();
+            if next.is_some() {
+                return next;
+            }
+            self.i += 1;
+            if self.i == self.shared.wakers.len() {
+                return None;
+            }
+        }
     }
 }
 
