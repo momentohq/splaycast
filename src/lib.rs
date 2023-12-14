@@ -66,7 +66,7 @@
 //! # use futures::StreamExt;
 //! # use splaycast::Message;
 //! # tokio_test::block_on(async {
-//! let (sender, engine, splaycast) = splaycast::channel(128);
+//! let (mut sender, engine, splaycast) = splaycast::channel(128);
 //! tokio::spawn(engine);
 //!
 //! let mut receiver = splaycast.subscribe();
