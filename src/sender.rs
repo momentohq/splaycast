@@ -17,7 +17,6 @@ use futures::{task::AtomicWaker, Stream};
 /// As long as you're not sustaining a higher send rate than the splaycast
 /// engine can drain, you should see memory usage track pretty closely to your
 /// splaycast buffer size, and not much worse than 2*buffer size worst case.
-#[derive(Clone)]
 pub struct Sender<T> {
     queue: Arc<ArrayQueue<T>>,
     waker: Arc<AtomicWaker>,

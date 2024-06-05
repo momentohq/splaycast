@@ -8,7 +8,7 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
-use crossbeam_queue::SegQueue;
+use crossbeam_queue::ArrayQueue;
 use futures::task::AtomicWaker;
 
 use crate::SplaycastEntry;
@@ -16,7 +16,7 @@ use crate::SplaycastEntry;
 /// Shared, lock-free state for splaying out notifications to receiver streams from an upstream stream.
 pub struct Shared<Item> {
     subscriber_count: AtomicUsize,
-    wakers: Arc<SegQueue<WakeHandle>>,
+    wakers: Arc<ArrayQueue<WakeHandle>>,
     queue: Arc<ArcSwap<VecDeque<SplaycastEntry<Item>>>>,
     waker: AtomicWaker,
     is_dead: AtomicBool,
@@ -40,7 +40,7 @@ where
     pub fn new(buffer_size: usize) -> Self {
         Self {
             subscriber_count: Default::default(),
-            wakers: Default::default(),
+            wakers: Arc::new(ArrayQueue::new(1024)),
             queue: Arc::new(ArcSwap::from_pointee(VecDeque::with_capacity(buffer_size))),
             waker: Default::default(),
             is_dead: Default::default(),
@@ -100,7 +100,10 @@ where
             handle.wake();
             return;
         }
-        self.wakers.push(handle);
+        if let Err(handle) = self.wakers.push(handle) {
+            log::trace!("waker queue full. Engine is draining too slowly");
+            handle.wake();
+        }
         self.waker.wake()
     }
 

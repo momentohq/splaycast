@@ -55,18 +55,18 @@ where
         mut self: Pin<&mut Self>,
         context: &mut Context<'_>,
     ) -> (bool, Option<Poll<()>>) {
-        let mut new_queue = {
-            let shared_queue = self.shared.load_queue();
-            let mut new_queue = VecDeque::with_capacity(shared_queue.capacity());
-            new_queue.clone_from(shared_queue.as_ref());
-            new_queue
-        };
-        let start_message = self.next_message_id;
+        let mut new_queue: Option<VecDeque<SplaycastEntry<Item>>> = None;
 
         let result = loop {
             match pin!(&mut self.upstream).poll_next(context) {
                 Poll::Ready(state) => match state {
                     Some(item) => {
+                        let new_queue = new_queue.get_or_insert_with(|| {
+                            let shared_queue = self.shared.load_queue();
+                            let mut new_queue = VecDeque::with_capacity(shared_queue.capacity());
+                            new_queue.clone_from(shared_queue.as_ref());
+                            new_queue
+                        });
                         if new_queue.capacity() == new_queue.len() {
                             new_queue.pop_front();
                         }
@@ -86,7 +86,7 @@ where
             }
         };
 
-        if self.next_message_id != start_message {
+        if let Some(new_queue) = new_queue {
             // TODO: buffer the buffers
             // This new queue process is too expensive per message, but sharing will require some clever
             // or optimistic arc swapping.
@@ -134,8 +134,7 @@ where
         }
 
         // Service downstreams
-        let shared = self.shared.clone();
-        for waker in shared.drain_wakelist() {
+        for waker in self.shared.drain_wakelist() {
             if self.next_message_id <= waker.next_message_id() {
                 log::trace!("parking at {}", waker.next_message_id());
                 self.parked_wakers.push(waker);
