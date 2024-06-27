@@ -1,10 +1,7 @@
 use std::{
     collections::VecDeque,
     pin::Pin,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::Arc,
     task::{Context, Poll},
 };
 
@@ -36,7 +33,6 @@ where
 {
     shared: Arc<Shared<Item>>,
     next_message_id: u64,
-    dirty: Arc<AtomicBool>,
 }
 
 impl<Item> std::fmt::Debug for Receiver<Item>
@@ -46,7 +42,6 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SplaycastReceiver")
             .field("next", &self.next_message_id)
-            .field("dirty", &self.dirty.load(Ordering::Relaxed))
             .finish()
     }
 }
@@ -58,18 +53,15 @@ where
     pub(crate) fn new(shared: Arc<Shared<Item>>) -> Self {
         shared.increment_subscriber_count();
         Self {
+            next_message_id: shared.subscribe_sequence_number(),
             shared,
-            next_message_id: 0,
-            dirty: Arc::new(AtomicBool::new(true)),
         }
     }
 
     fn mark_clean_and_register_for_wake(&mut self, context: &mut Context<'_>) {
-        self.dirty.store(false, Ordering::Release);
         self.shared.register_waker(WakeHandle::new(
             self.next_message_id,
             context.waker().clone(),
-            self.dirty.clone(),
         ));
     }
 }
@@ -95,33 +87,29 @@ where
             return Poll::Ready(None); // It's dead
         }
 
-        if !self.dirty.load(Ordering::Acquire) {
-            log::trace!("pending clean");
-            return Poll::Pending; // We haven't gotten anything new yet.
-        }
         let shared_queue_snapshot = self.shared.load_queue();
         let tip_id = match shared_queue_snapshot.back() {
             Some(back) => back.id,
-            None => {
-                log::trace!("pending clean - empty snapshot");
-                self.next_message_id = 1;
-                self.mark_clean_and_register_for_wake(context);
-                return Poll::Pending; // We're registered for wake on delivery of new items at the next message id.
-            }
+            None => self.next_message_id,
         };
-
-        if self.next_message_id == 0 {
-            self.next_message_id = tip_id
-        }
 
         let index = match find(self.next_message_id, &shared_queue_snapshot) {
             Ok(found) => found,
             Err(missing_at) => {
                 if missing_at == 0 {
+                    if tip_id == 1 {
+                        log::trace!("bootstrapping - no messages yet");
+                        self.mark_clean_and_register_for_wake(context);
+                        return Poll::Pending;
+                    }
                     // We fell off the buffer.
-                    let count = (tip_id - self.next_message_id) as usize;
+                    let next = shared_queue_snapshot
+                        .front()
+                        .map(|f| f.id)
+                        .unwrap_or(tip_id);
+                    let count = (next - self.next_message_id) as usize;
                     let lag = Message::Lagged { count };
-                    self.next_message_id = tip_id;
+                    self.next_message_id = next;
                     log::trace!("ready lag - {count}");
                     return Poll::Ready(Some(lag));
                 } else if missing_at == shared_queue_snapshot.len() {
@@ -165,12 +153,5 @@ fn find<Item>(id: u64, buffer: &VecDeque<SplaycastEntry<Item>>) -> Result<usize,
             }
         }
         None => Err(0), // empty buffer
-    }
-}
-
-impl<T: Clone> Receiver<T> {
-    #[doc(hidden)] // This is a test tool
-    pub fn is_parked(&self) -> bool {
-        !self.dirty.load(Ordering::Acquire)
     }
 }

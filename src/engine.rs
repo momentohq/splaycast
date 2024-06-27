@@ -22,6 +22,7 @@ pub struct Engine<Upstream, Item: Clone> {
     upstream: Upstream,
     // TODO: buffer the buffers
     shared: Arc<Shared<Item>>,
+    grace_limit: usize,
     parked_wakers: Vec<WakeHandle>,
 }
 
@@ -42,11 +43,12 @@ where
     Upstream: futures::Stream<Item = Item> + Unpin,
     Item: Clone + Send,
 {
-    pub(crate) fn new(upstream: Upstream, shared: Arc<Shared<Item>>) -> Self {
+    pub(crate) fn new(upstream: Upstream, shared: Arc<Shared<Item>>, grace_limit: usize) -> Self {
         Self {
             next_message_id: 1,
             upstream,
             shared,
+            grace_limit,
             parked_wakers: Default::default(),
         }
     }
@@ -63,16 +65,18 @@ where
                     Some(item) => {
                         let new_queue = new_queue.get_or_insert_with(|| {
                             let shared_queue = self.shared.load_queue();
-                            let mut new_queue = VecDeque::with_capacity(shared_queue.capacity());
+                            let mut new_queue = VecDeque::with_capacity(self.grace_limit);
                             new_queue.clone_from(shared_queue.as_ref());
                             new_queue
                         });
-                        if new_queue.capacity() == new_queue.len() {
+                        if self.grace_limit == new_queue.len() {
                             new_queue.pop_front();
                         }
                         let id = self.next_message_id;
                         self.next_message_id += 1;
-                        new_queue.push_back(SplaycastEntry { id, item });
+                        let entry = SplaycastEntry { id, item };
+                        log::trace!("new entry id {}", entry.id);
+                        new_queue.push_back(entry);
                     }
                     None => {
                         log::debug!("upstream closed");
@@ -135,8 +139,9 @@ where
 
         // Service downstreams
         for waker in self.shared.drain_wakelist() {
-            if self.next_message_id <= waker.next_message_id() {
-                log::trace!("parking at {}", waker.next_message_id());
+            let tip = self.next_message_id - 1;
+            if tip < waker.next_message_id() {
+                log::trace!("tip at {tip}, parking at {}", waker.next_message_id());
                 self.parked_wakers.push(waker);
                 continue; // this waker does not need to be woken. We parked it waiting new data
             }

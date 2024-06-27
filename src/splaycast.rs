@@ -24,7 +24,7 @@ where
         Upstream: futures::Stream<Item = Item> + Unpin,
     {
         let shared = Arc::new(Shared::new(buffer_size));
-        let engine = Engine::new(upstream, shared.clone());
+        let engine = Engine::new(upstream, shared.clone(), buffer_size);
         (engine, Self { shared })
     }
 

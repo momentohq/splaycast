@@ -1,7 +1,7 @@
 use std::{
     collections::VecDeque,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc,
     },
     task::Context,
@@ -16,6 +16,7 @@ use crate::SplaycastEntry;
 /// Shared, lock-free state for splaying out notifications to receiver streams from an upstream stream.
 pub struct Shared<Item> {
     subscriber_count: AtomicUsize,
+    subscribe_sequence: AtomicU64,
     wakers: Arc<ArrayQueue<WakeHandle>>,
     queue: Arc<ArcSwap<VecDeque<SplaycastEntry<Item>>>>,
     waker: AtomicWaker,
@@ -40,6 +41,7 @@ where
     pub fn new(buffer_size: usize) -> Self {
         Self {
             subscriber_count: Default::default(),
+            subscribe_sequence: AtomicU64::new(1),
             wakers: Arc::new(ArrayQueue::new(1024)),
             queue: Arc::new(ArcSwap::from_pointee(VecDeque::with_capacity(buffer_size))),
             waker: Default::default(),
@@ -90,7 +92,16 @@ where
             self.queue.load().len(),
             next.len()
         );
-        self.queue.swap(Arc::new(next))
+        let last_sequence_number = next.back().map(|item| item.id).unwrap_or(0);
+        let previous = self.queue.swap(Arc::new(next));
+        self.subscribe_sequence
+            .store(last_sequence_number + 1, Ordering::Relaxed);
+        previous
+    }
+
+    #[inline]
+    pub(crate) fn subscribe_sequence_number(&self) -> u64 {
+        self.subscribe_sequence.load(Ordering::Relaxed)
     }
 
     #[inline]
@@ -139,25 +150,15 @@ impl<T: Clone> Iterator for WakeIterator<T> {
 pub struct WakeHandle {
     message_id: u64,
     waker: core::task::Waker,
-    this_handle_woke: Arc<AtomicBool>,
 }
 
 impl WakeHandle {
-    pub fn new(
-        message_id: u64,
-        waker: core::task::Waker,
-        this_handle_woke: Arc<AtomicBool>,
-    ) -> Self {
-        Self {
-            message_id,
-            waker,
-            this_handle_woke,
-        }
+    pub fn new(message_id: u64, waker: core::task::Waker) -> Self {
+        Self { message_id, waker }
     }
 
     #[inline]
     pub fn wake(self) {
-        self.this_handle_woke.store(true, Ordering::Release);
         self.waker.wake()
     }
 

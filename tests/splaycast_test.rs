@@ -90,7 +90,7 @@ fn empty_snapshot_park_list() {
 }
 
 #[allow(clippy::expect_used)] // i mean, it's a test
-#[test]
+#[test_log::test]
 fn join_active_splaycast() {
     let (publish_handle, splaycast, mut engine) = get_splaycast();
     (0..100).for_each(|i| publish_handle.send(i).expect("unbounded send"));
@@ -102,11 +102,15 @@ fn join_active_splaycast() {
         "accept 100 messages and 1 subscriber"
     );
 
-    let mut next = pin!(subscriber.next());
     assert_eq!(
-        Poll::Ready(entry(99)),
-        poll(&mut next),
-        "The queue length is 2, but we resume from the tip"
+        Poll::Ready(lag(98)),
+        poll(&mut pin!(subscriber.next())),
+        "The queue length is 2, and the subscriber joined at 1."
+    );
+    assert_eq!(
+        Poll::Ready(entry(98)),
+        poll(&mut pin!(subscriber.next())),
+        "The queue length is 2, and the subscriber joined at 1 - 98 is the front of the buffer"
     );
     assert_eq!(
         Poll::Pending,
@@ -118,9 +122,21 @@ fn join_active_splaycast() {
     assert_eq!(Poll::Pending, poll(&mut engine)); // Drive the engine 1 step
 
     assert_eq!(
+        Poll::Ready(entry(99_usize)),
+        poll(&mut pin!(subscriber.next())),
+        "Engine accepted 4, and 98 should be dropped. This subscriber is still at the tail"
+    );
+
+    assert_eq!(
         Poll::Ready(entry(4_usize)),
-        poll(&mut next),
-        "Engine should have woken this subscriber from the park list"
+        poll(&mut pin!(subscriber.next())),
+        "Subscriber should be caught up"
+    );
+
+    assert_eq!(
+        Poll::Pending,
+        poll(&mut pin!(subscriber.next())),
+        "Subscriber should be caught up"
     );
 }
 
@@ -215,7 +231,7 @@ fn slow_subscriber() {
     assert_eq!(
         Poll::Pending,
         poll_next(&mut slow_subscriber),
-        "slowly consumes, but needs to be initialized"
+        "slowly consumes, has nothing at the start"
     );
 
     for i in 0..10 {
@@ -232,11 +248,22 @@ fn slow_subscriber() {
         );
     }
 
-    assert_eq!(Poll::Ready(lag(9)), poll_next(&mut slow_subscriber), "Yes, we published 10 to a queue of 2. When we lag we move to the tip - this shouldn't be 8!");
+    assert_eq!(
+        Poll::Ready(lag(8)),
+        poll_next(&mut slow_subscriber),
+        "Yes, we published 10 to a queue of 2.
+        When we lag we move to the start of the buffer. This is done to try to minimize lag size.
+        If your subscriber is always slow, this will make more lag messages than if it were to reconnect at the tip."
+    );
+    assert_eq!(
+        Poll::Ready(entry(8)),
+        poll_next(&mut slow_subscriber),
+        "Skipped to the start of the queue"
+    );
     assert_eq!(
         Poll::Ready(entry(9)),
         poll_next(&mut slow_subscriber),
-        "Skipped to the front of the queue, but not off the end"
+        "can consume to the front of the queue"
     );
     assert_eq!(
         Poll::Pending,
@@ -260,10 +287,6 @@ fn drop_splaycast() {
         poll(&mut engine),
         "move subscriber to park list"
     );
-    assert!(
-        parked_subscriber.is_parked(),
-        "subscriber is in the park list"
-    );
 
     let mut wake_queue_subscriber: splaycast::Receiver<usize> = splaycast.subscribe();
     assert_eq!(
@@ -274,20 +297,11 @@ fn drop_splaycast() {
 
     // Dropping the Splaycast kills the splaycast.
     drop(splaycast);
-    assert!(
-        parked_subscriber.is_parked(),
-        "receivers get promptly notified by the Engine, but not until the Engine runs"
-    );
 
     assert_eq!(
         Poll::Ready(()),
         poll(&mut engine),
         "Engine terminates promptly upon being set dead"
-    );
-
-    assert!(
-        !parked_subscriber.is_parked(),
-        "receivers are immediately woken when the splaycast is killed"
     );
 
     assert_eq!(
@@ -312,10 +326,6 @@ fn drop_engine() {
         poll(&mut engine),
         "move subscriber to park list"
     );
-    assert!(
-        parked_subscriber.is_parked(),
-        "subscriber is in the park list"
-    );
 
     let mut wake_queue_subscriber: splaycast::Receiver<usize> = splaycast.subscribe();
     assert_eq!(
@@ -326,11 +336,6 @@ fn drop_engine() {
 
     // Dropping the splaycast Engine kills the splaycast. Probably dropping Engine is a mistake, but it should still not leak subscribers!!!
     drop(engine);
-
-    assert!(
-        !parked_subscriber.is_parked(),
-        "receivers are immediately woken when the engine is killed"
-    );
 
     assert_eq!(
         Poll::Ready(None),
@@ -354,10 +359,6 @@ fn drop_upstream() {
         poll(&mut engine),
         "move subscriber to park list"
     );
-    assert!(
-        parked_subscriber.is_parked(),
-        "subscriber is in the park list"
-    );
 
     let mut wake_queue_subscriber: splaycast::Receiver<usize> = splaycast.subscribe();
     assert_eq!(
@@ -370,20 +371,10 @@ fn drop_upstream() {
     // When Engine is awoken with a dead upstream, it kills the splaycast. The subscribers should all be promptly notified and all resources released.
     drop(publish_handle);
 
-    assert!(
-        parked_subscriber.is_parked(),
-        "receivers do not know immediately that the upstream died"
-    );
-
     assert_eq!(
         Poll::Ready(()),
         poll(&mut engine),
         "Engine sees the upstream is dead and wakes subscribers before releasing itself"
-    );
-
-    assert!(
-        !parked_subscriber.is_parked(),
-        "receivers are immediately woken when the engine dies from an upstream termination"
     );
 
     assert_eq!(
@@ -408,10 +399,6 @@ fn drop_downstreams() {
         Poll::Pending,
         poll(&mut engine),
         "move subscriber to park list"
-    );
-    assert!(
-        parked_subscriber.is_parked(),
-        "subscriber is in the park list"
     );
 
     let mut wake_queue_subscriber: splaycast::Receiver<usize> = splaycast.subscribe();
