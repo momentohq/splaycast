@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{engine::Engine, receiver::Receiver, shared::Shared};
+use crate::{buffer_policy::BufferPolicy, engine::Engine, receiver::Receiver, shared::Shared};
 
 /// The handle for attaching new subscribers to and inspecting the state of a splaycast.
 #[derive(Debug)]
@@ -16,15 +16,16 @@ where
     Item: Unpin + Clone + Send,
 {
     // Wire a splaying channel adapter to an upstream stream.
-    pub(crate) fn new<Upstream>(
+    pub(crate) fn new<Upstream, Policy>(
         upstream: Upstream,
-        buffer_size: usize,
-    ) -> (Engine<Upstream, Item>, Self)
+        buffer_policy: Policy,
+    ) -> (Engine<Upstream, Item, Policy>, Self)
     where
         Upstream: futures::Stream<Item = Item> + Unpin,
+        Policy: BufferPolicy<Item>,
     {
-        let shared = Arc::new(Shared::new(buffer_size));
-        let engine = Engine::new(upstream, shared.clone(), buffer_size);
+        let shared = Arc::new(Shared::new());
+        let engine = Engine::new(upstream, shared.clone(), buffer_policy);
         (engine, Self { shared })
     }
 
@@ -33,6 +34,17 @@ where
     /// the configured buffer.
     pub fn subscribe(&self) -> Receiver<Item> {
         Receiver::new(self.shared.clone())
+    }
+
+    /// Get a new streaming Receiver from the upstream stream. Values are cloned to
+    /// this receiver, and lag is tracked if you consume too slowly and fall off of
+    /// the configured buffer.
+    ///
+    /// This subscription receives starting from the oldest item in the buffer. You will
+    /// race with the buffer policy to get the items, so you may see lag messages as you
+    /// get started and catch up.
+    pub fn subscribe_at_tail(&self) -> Receiver<Item> {
+        Receiver::new_at_buffer_start(self.shared.clone())
     }
 
     /// This is informational, and may be stale before it even returns. It is maintained

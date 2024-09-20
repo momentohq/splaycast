@@ -17,6 +17,7 @@ use crate::SplaycastEntry;
 pub struct Shared<Item> {
     subscriber_count: AtomicUsize,
     subscribe_sequence: AtomicU64,
+    subscribe_tail_sequence: AtomicU64,
     wakers: Arc<ArrayQueue<WakeHandle>>,
     queue: Arc<ArcSwap<VecDeque<SplaycastEntry<Item>>>>,
     waker: AtomicWaker,
@@ -38,12 +39,13 @@ impl<Item> Shared<Item>
 where
     Item: Clone,
 {
-    pub fn new(buffer_size: usize) -> Self {
+    pub fn new() -> Self {
         Self {
             subscriber_count: Default::default(),
             subscribe_sequence: AtomicU64::new(1),
+            subscribe_tail_sequence: AtomicU64::new(1),
             wakers: Arc::new(ArrayQueue::new(1024)),
-            queue: Arc::new(ArcSwap::from_pointee(VecDeque::with_capacity(buffer_size))),
+            queue: Arc::new(ArcSwap::from_pointee(VecDeque::new())),
             waker: Default::default(),
             is_dead: Default::default(),
         }
@@ -92,16 +94,24 @@ where
             self.queue.load().len(),
             next.len()
         );
+        let first_sequence_number = next.front().map(|item| item.id).unwrap_or(0);
         let last_sequence_number = next.back().map(|item| item.id).unwrap_or(0);
         let previous = self.queue.swap(Arc::new(next));
         self.subscribe_sequence
             .store(last_sequence_number + 1, Ordering::Relaxed);
+        self.subscribe_tail_sequence
+            .store(first_sequence_number + 1, Ordering::Release);
         previous
     }
 
     #[inline]
     pub(crate) fn subscribe_sequence_number(&self) -> u64 {
         self.subscribe_sequence.load(Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub(crate) fn subscribe_tail_sequence_number(&self) -> u64 {
+        self.subscribe_tail_sequence.load(Ordering::Acquire)
     }
 
     #[inline]

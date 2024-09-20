@@ -58,6 +58,14 @@ where
         }
     }
 
+    pub(crate) fn new_at_buffer_start(shared: Arc<Shared<Item>>) -> Self {
+        shared.increment_subscriber_count();
+        Self {
+            next_message_id: shared.subscribe_tail_sequence_number(),
+            shared,
+        }
+    }
+
     fn mark_clean_and_register_for_wake(&mut self, context: &mut Context<'_>) {
         self.shared.register_waker(WakeHandle::new(
             self.next_message_id,

@@ -7,6 +7,7 @@ use std::{
 };
 
 use crate::{
+    buffer_policy::{BufferInstruction, BufferPolicy},
     shared::{Shared, WakeHandle},
     SplaycastEntry,
 };
@@ -17,16 +18,16 @@ use crate::{
 /// Engine can do its work without blocking or synchronizing with the receivers.
 /// This is true because Engine uses the raw `poll` affordance of Future, which
 /// vends an &mut view of self.
-pub struct Engine<Upstream, Item: Clone> {
+pub struct Engine<Upstream, Item: Clone, Policy> {
     next_message_id: u64,
     upstream: Upstream,
     // TODO: buffer the buffers
     shared: Arc<Shared<Item>>,
-    grace_limit: usize,
+    buffer_policy: Policy,
     parked_wakers: Vec<WakeHandle>,
 }
 
-impl<Upstream, Item> std::fmt::Debug for Engine<Upstream, Item>
+impl<Upstream, Item, Policy> std::fmt::Debug for Engine<Upstream, Item, Policy>
 where
     Item: Clone,
 {
@@ -38,17 +39,22 @@ where
     }
 }
 
-impl<Upstream, Item> Engine<Upstream, Item>
+impl<Upstream, Item, Policy> Engine<Upstream, Item, Policy>
 where
     Upstream: futures::Stream<Item = Item> + Unpin,
     Item: Clone + Send,
+    Policy: BufferPolicy<Item>,
 {
-    pub(crate) fn new(upstream: Upstream, shared: Arc<Shared<Item>>, grace_limit: usize) -> Self {
+    pub(crate) fn new(
+        upstream: Upstream,
+        shared: Arc<Shared<Item>>,
+        buffer_policy: Policy,
+    ) -> Self {
         Self {
             next_message_id: 1,
             upstream,
             shared,
-            grace_limit,
+            buffer_policy,
             parked_wakers: Default::default(),
         }
     }
@@ -60,22 +66,36 @@ where
         let mut new_queue: Option<VecDeque<SplaycastEntry<Item>>> = None;
 
         let result = loop {
-            match pin!(&mut self.upstream).poll_next(context) {
+            let next = pin!(&mut self.upstream).poll_next(context);
+            match next {
                 Poll::Ready(state) => match state {
                     Some(item) => {
                         let new_queue = new_queue.get_or_insert_with(|| {
                             let shared_queue = self.shared.load_queue();
-                            let mut new_queue = VecDeque::with_capacity(self.grace_limit);
+                            let mut new_queue = VecDeque::new();
                             new_queue.clone_from(shared_queue.as_ref());
                             new_queue
                         });
-                        if self.grace_limit == new_queue.len() {
-                            new_queue.pop_front();
+                        while BufferInstruction::Pop
+                            == new_queue
+                                .front()
+                                .map(|buffer_tail| {
+                                    self.buffer_policy.buffer_tail_policy(&buffer_tail.item)
+                                })
+                                .unwrap_or(BufferInstruction::Retain)
+                        {
+                            let mut oldest = new_queue
+                                .pop_front()
+                                .expect("front was checked above; this is removing the value");
+                            self.buffer_policy.on_after_pop(&mut oldest.item);
                         }
                         let id = self.next_message_id;
                         self.next_message_id += 1;
-                        let entry = SplaycastEntry { id, item };
+
+                        let mut entry = SplaycastEntry { id, item };
                         log::trace!("new entry id {}", entry.id);
+                        self.buffer_policy.on_before_send(&mut entry.item);
+
                         new_queue.push_back(entry);
                     }
                     None => {
@@ -103,12 +123,13 @@ where
 }
 
 /// Safety: I don't use unsafe for this type
-impl<Upstream, Item> Unpin for Engine<Upstream, Item> where Item: Clone {}
+impl<Upstream, Item, Policy> Unpin for Engine<Upstream, Item, Policy> where Item: Clone {}
 
-impl<Upstream, Item> futures::Future for Engine<Upstream, Item>
+impl<Upstream, Item, Policy> futures::Future for Engine<Upstream, Item, Policy>
 where
     Upstream: futures::Stream<Item = Item> + Unpin,
     Item: Clone + Send,
+    Policy: BufferPolicy<Item>,
 {
     type Output = ();
 
@@ -155,7 +176,7 @@ where
     }
 }
 
-impl<Upstream, Item: Clone> Engine<Upstream, Item> {
+impl<Upstream, Item: Clone, Policy> Engine<Upstream, Item, Policy> {
     fn wake_everybody_because_i_am_dead(&mut self) {
         log::trace!("is dead - waking everyone");
         for waker in std::mem::take(&mut self.parked_wakers) {
@@ -168,7 +189,7 @@ impl<Upstream, Item: Clone> Engine<Upstream, Item> {
     }
 }
 
-impl<Upstream, Item: Clone> Drop for Engine<Upstream, Item> {
+impl<Upstream, Item: Clone, Policy> Drop for Engine<Upstream, Item, Policy> {
     fn drop(&mut self) {
         log::trace!("dropping splaycast Engine");
         self.shared.set_dead();
