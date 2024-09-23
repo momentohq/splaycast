@@ -4,18 +4,28 @@ use std::{
 };
 
 use futures::{task::noop_waker_ref, Future, Stream};
-use splaycast::{Engine, Message, Splaycast};
+use splaycast::{buffer_policy::BufferPolicy, Engine, Message, Splaycast};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 
 fn get_splaycast() -> (
     UnboundedSender<usize>,
     Splaycast<usize>,
-    Engine<UnboundedReceiverStream<usize>, usize>,
+    Engine<UnboundedReceiverStream<usize>, usize, impl BufferPolicy<usize>>,
+) {
+    get_splaycast_with_buffer(2)
+}
+
+fn get_splaycast_with_buffer(
+    length: usize,
+) -> (
+    UnboundedSender<usize>,
+    Splaycast<usize>,
+    Engine<UnboundedReceiverStream<usize>, usize, impl BufferPolicy<usize>>,
 ) {
     let (publish_handle, upstream) = unbounded_channel::<usize>();
     let upstream = UnboundedReceiverStream::new(upstream); // Ideally you'd use an upstream from something like a tonic server streaming response
-    let (engine, splaycast) = splaycast::wrap(upstream, 2);
+    let (engine, splaycast) = splaycast::wrap(upstream, length);
     (publish_handle, splaycast, engine)
 }
 
@@ -92,7 +102,7 @@ fn empty_snapshot_park_list() {
 #[allow(clippy::expect_used)] // i mean, it's a test
 #[test_log::test]
 fn join_active_splaycast() {
-    let (publish_handle, splaycast, mut engine) = get_splaycast();
+    let (publish_handle, splaycast, mut engine) = get_splaycast_with_buffer(3);
     (0..100).for_each(|i| publish_handle.send(i).expect("unbounded send"));
 
     let mut subscriber = splaycast.subscribe();
@@ -103,14 +113,14 @@ fn join_active_splaycast() {
     );
 
     assert_eq!(
-        Poll::Ready(lag(98)),
+        Poll::Ready(lag(97)),
         poll(&mut pin!(subscriber.next())),
-        "The queue length is 2, and the subscriber joined at 1."
+        "The queue length is 3, and the subscriber joined at 1."
     );
     assert_eq!(
-        Poll::Ready(entry(98)),
+        Poll::Ready(entry(97)),
         poll(&mut pin!(subscriber.next())),
-        "The queue length is 2, and the subscriber joined at 1 - 98 is the front of the buffer"
+        "The queue length is 3, and the subscriber joined at 1 - 97 is the front of the buffer"
     );
     assert_eq!(
         Poll::Pending,
@@ -122,9 +132,15 @@ fn join_active_splaycast() {
     assert_eq!(Poll::Pending, poll(&mut engine)); // Drive the engine 1 step
 
     assert_eq!(
+        Poll::Ready(entry(98_usize)),
+        poll(&mut pin!(subscriber.next())),
+        "Engine accepted 4, and 97 should be dropped. This subscriber is now at the old end of the buffer"
+    );
+
+    assert_eq!(
         Poll::Ready(entry(99_usize)),
         poll(&mut pin!(subscriber.next())),
-        "Engine accepted 4, and 98 should be dropped. This subscriber is still at the tail"
+        "This subscriber is now in the middle of the buffer"
     );
 
     assert_eq!(
@@ -137,6 +153,13 @@ fn join_active_splaycast() {
         Poll::Pending,
         poll(&mut pin!(subscriber.next())),
         "Subscriber should be caught up"
+    );
+
+    let mut tail_subscriber = splaycast.subscribe_at_tail();
+    assert_eq!(
+        Poll::Ready(entry(99_usize)),
+        poll(&mut pin!(tail_subscriber.next())),
+        "Tail subscriber should receive old messages. I'm starting 1 past the oldest in an attempt to help win more join races without lags"
     );
 }
 

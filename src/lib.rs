@@ -82,6 +82,7 @@
 //! # Feature Flags
 //!
 
+pub mod buffer_policy;
 mod engine;
 mod receiver;
 mod sender;
@@ -100,6 +101,7 @@ pub enum Message<T> {
     Lagged { count: usize },
 }
 
+use buffer_policy::{BufferLengthPolicy, BufferPolicy};
 pub use engine::Engine;
 pub use receiver::Receiver;
 pub use sender::{Sender, SenderStream};
@@ -119,15 +121,46 @@ pub use splaycast::Splaycast;
 /// make progress at the same time, and consequentially it _may_ reduce
 /// the value of doing an Arc<> wrap for things like an intermediate Tonic
 /// broadcast stream.
-pub fn wrap<T, Upstream>(
+pub fn wrap<Item, Upstream>(
     upstream: Upstream,
-    buffer_size: usize,
-) -> (Engine<Upstream, T>, Splaycast<T>)
+    buffer_length: usize,
+) -> (
+    Engine<Upstream, Item, impl BufferPolicy<Item>>,
+    Splaycast<Item>,
+)
 where
-    T: Clone + Send + Unpin,
-    Upstream: futures::Stream<Item = T> + Unpin,
+    Item: Clone + Send + Unpin,
+    Upstream: futures::Stream<Item = Item> + Unpin,
 {
-    Splaycast::new(upstream, buffer_size)
+    Splaycast::new(upstream, BufferLengthPolicy::new(buffer_length))
+}
+
+/// Wrap a stream with a Splaycast - a broadcast channel for streams.
+///
+/// This function returns you a tuple:
+/// * An Engine you need to spawn on your async runtime.
+/// * A Splaycast handle to which you may `subscribe()`.
+///
+/// You can wrap pretty much any futures::Stream. Notably, you need to
+/// make sure your T is safely Cloneable. Plain owned data is fine, but
+/// you need to be aware that the Receiver will call clone() on your data.
+///
+/// Calling clone on the Receiver helps to make sure multiple threads can
+/// make progress at the same time, and consequentially it _may_ reduce
+/// the value of doing an Arc<> wrap for things like an intermediate Tonic
+/// broadcast stream.
+pub fn wrap_with_policy<Item, Upstream>(
+    upstream: Upstream,
+    buffer_policy: impl BufferPolicy<Item>,
+) -> (
+    Engine<Upstream, Item, impl BufferPolicy<Item>>,
+    Splaycast<Item>,
+)
+where
+    Item: Clone + Send + Unpin,
+    Upstream: futures::Stream<Item = Item> + Unpin,
+{
+    Splaycast::new(upstream, buffer_policy)
 }
 
 /// Get a channel to splay out to streaming receivers.
@@ -152,12 +185,79 @@ where
 /// assert_eq!(Some(Message::Entry { item: "hello" }), hello);
 /// # })
 /// ```
-pub fn channel<T>(buffer_size: usize) -> (Sender<T>, Engine<SenderStream<T>, T>, Splaycast<T>)
+pub fn channel<Item>(
+    buffer_length: usize,
+) -> (
+    Sender<Item>,
+    Engine<SenderStream<Item>, Item, impl BufferPolicy<Item>>,
+    Splaycast<Item>,
+)
 where
-    T: Clone + Send + Unpin,
+    Item: Clone + Send + Unpin,
 {
-    let (sender, stream) = Sender::new(buffer_size);
-    let (engine, splaycast) = Splaycast::new(stream, buffer_size);
+    let (sender, stream) = Sender::new(buffer_length);
+    let (engine, splaycast) = Splaycast::new(stream, BufferLengthPolicy::new(buffer_length));
+    (sender, engine, splaycast)
+}
+
+/// Get a channel to splay out to streaming receivers.
+///
+/// A channel has send(item), while a wrap(upstream)'d splaycast has no
+/// adapters before directly consuming a stream.
+///
+/// If you have a stream you want to duplicate, wrap() it. If you have
+/// a collection or some computed value that you want to duplicate, use
+/// a channel().
+///
+/// The `send_buffer_length` parameter is the size of the buffer that the
+/// Sender adapter uses to hold items before they are consumed by the Engine.
+///
+/// ```
+/// # use std::time::Duration;
+/// # use futures::StreamExt;
+/// # use splaycast::Message;
+/// # use splaycast::buffer_policy::{BufferAgePolicy, BufferLengthPolicy, BufferPolicyExtension, BufferWeightPolicy};
+/// # tokio_test::block_on(async {
+///
+/// #[derive(Clone, Debug, PartialEq, Eq)]
+/// struct MyItem {
+///     timestamp: std::time::Instant,
+///     bytes_weight: usize,
+/// }
+///
+/// let length_age_bytes_limited_policy = BufferLengthPolicy::new(64)
+///     .wrap(BufferAgePolicy::new(Duration::from_secs(5), |item: &MyItem| {
+///         item.timestamp
+///     }))
+///     .wrap(BufferWeightPolicy::new(1024 * 1024, |item: &MyItem| {
+///         item.bytes_weight
+///     }));
+///
+/// let (sender, engine, splaycast) = splaycast::channel_with_policy(128, length_age_bytes_limited_policy);
+/// tokio::spawn(engine);
+///
+/// let mut receiver = splaycast.subscribe();
+///
+/// let now = std::time::Instant::now();
+/// sender.send(MyItem { timestamp: now, bytes_weight: 1024 });
+///
+/// let hello = receiver.next().await;
+/// assert_eq!(Some(Message::Entry { item: MyItem { timestamp: now, bytes_weight: 1024 } }), hello);
+/// # })
+/// ```
+pub fn channel_with_policy<Item>(
+    send_buffer_length: usize,
+    buffer_policy: impl BufferPolicy<Item>,
+) -> (
+    Sender<Item>,
+    Engine<SenderStream<Item>, Item, impl BufferPolicy<Item>>,
+    Splaycast<Item>,
+)
+where
+    Item: Clone + Send + Unpin,
+{
+    let (sender, stream) = Sender::new(send_buffer_length);
+    let (engine, splaycast) = Splaycast::new(stream, buffer_policy);
     (sender, engine, splaycast)
 }
 
