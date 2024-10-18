@@ -25,6 +25,8 @@ pub struct Engine<Upstream, Item: Clone, Policy> {
     shared: Arc<Shared<Item>>,
     buffer_policy: Policy,
     parked_wakers: Vec<WakeHandle>,
+    waking: Vec<WakeHandle>,
+    wake_limit: usize,
 }
 
 impl<Upstream, Item, Policy> std::fmt::Debug for Engine<Upstream, Item, Policy>
@@ -56,7 +58,15 @@ where
             shared,
             buffer_policy,
             parked_wakers: Default::default(),
+            waking: Default::default(),
+            wake_limit: 32,
         }
+    }
+
+    /// Set the maximum number of wakers to wake in a single poll cycle.
+    /// Larger numbers are more efficient, but can lead to excessive poll times.
+    pub fn set_wake_limit(&mut self, wake_limit: usize) {
+        self.wake_limit = wake_limit.max(1)
     }
 
     fn absorb_upstream(
@@ -151,15 +161,39 @@ where
         }
         // Upstream is Pending here.
 
-        if dirty {
+        if dirty || !self.waking.is_empty() {
             log::trace!("notifying parked: {}", self.parked_wakers.len());
-            for waker in std::mem::replace(&mut self.parked_wakers, Vec::with_capacity(16)) {
-                waker.wake()
+            {
+                let Self {
+                    waking,
+                    parked_wakers,
+                    ..
+                } = &mut *self;
+                if waking.is_empty() {
+                    std::mem::swap(waking, parked_wakers);
+                } else {
+                    waking.append(parked_wakers);
+                }
+            }
+            for _ in 0..self.wake_limit {
+                if let Some(waker) = self.waking.pop() {
+                    waker.wake();
+                } else {
+                    break;
+                }
+            }
+            if !self.waking.is_empty() {
+                context.waker().wake_by_ref();
             }
         }
 
         // Service downstreams
-        for waker in self.shared.drain_wakelist() {
+        for (serviced, waker) in self.shared.drain_wakelist().enumerate() {
+            if self.wake_limit == serviced {
+                context.waker().wake_by_ref();
+                break;
+            }
+
             let tip = self.next_message_id - 1;
             if tip < waker.next_message_id() {
                 log::trace!("tip at {tip}, parking at {}", waker.next_message_id());
