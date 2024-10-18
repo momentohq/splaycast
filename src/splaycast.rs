@@ -1,6 +1,11 @@
 use std::sync::Arc;
 
-use crate::{buffer_policy::BufferPolicy, engine::Engine, receiver::Receiver, shared::Shared};
+use crate::{
+    buffer_policy::BufferPolicy,
+    engine::Engine,
+    receiver::Receiver,
+    shared::{Shared, SubscriberCountHandle},
+};
 
 /// The handle for attaching new subscribers to and inspecting the state of a splaycast.
 #[derive(Debug)]
@@ -55,6 +60,16 @@ where
     /// return value though.
     pub fn subscriber_count(&self) -> usize {
         self.shared.subscriber_count()
+    }
+
+    /// This is informational, and may be stale before it even returns. It is maintained
+    /// as a ~best~ reasonable-effort counter that tracks subscribers. Memory ordering is
+    /// Relaxed, but it should settle within a _very_ short window of time to the actual
+    /// value in practice. But concurrent subscribe/drop will return you a snapshot of
+    /// an instant from this method, not necessarily the same instant that you inspect the
+    /// return value though.
+    pub fn subscriber_count_handle(&self) -> SubscriberCountHandle {
+        self.shared.subscriber_count_handle()
     }
 }
 

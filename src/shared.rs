@@ -15,7 +15,7 @@ use crate::SplaycastEntry;
 
 /// Shared, lock-free state for splaying out notifications to receiver streams from an upstream stream.
 pub struct Shared<Item> {
-    subscriber_count: AtomicUsize,
+    subscriber_count: Arc<AtomicUsize>,
     subscribe_sequence: AtomicU64,
     subscribe_tail_sequence: AtomicU64,
     wakers: Arc<ArrayQueue<WakeHandle>>,
@@ -139,6 +139,13 @@ where
             shared: self.clone(),
         }
     }
+
+    #[inline]
+    pub fn subscriber_count_handle(&self) -> SubscriberCountHandle {
+        SubscriberCountHandle {
+            subscriber_count: self.subscriber_count.clone(),
+        }
+    }
 }
 
 struct WakeIterator<T>
@@ -175,5 +182,20 @@ impl WakeHandle {
     #[inline]
     pub fn next_message_id(&self) -> u64 {
         self.message_id
+    }
+}
+
+/// A handle for inspecting the current subscriber count.
+/// Subscriber counts are updated asynchronously, so values may be stale.
+#[derive(Debug, Clone)]
+pub struct SubscriberCountHandle {
+    subscriber_count: Arc<AtomicUsize>,
+}
+
+impl SubscriberCountHandle {
+    /// Get the current subscriber count.
+    /// Subscriber counts are updated asynchronously, so values may be stale.
+    pub fn get(&self) -> usize {
+        self.subscriber_count.load(Ordering::Relaxed)
     }
 }
