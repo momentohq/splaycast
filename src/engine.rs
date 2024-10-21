@@ -161,20 +161,20 @@ where
         }
         // Upstream is Pending here.
 
-        if dirty || !self.waking.is_empty() {
+        if dirty {
             log::trace!("notifying parked: {}", self.parked_wakers.len());
-            {
-                let Self {
-                    waking,
-                    parked_wakers,
-                    ..
-                } = &mut *self;
-                if waking.is_empty() {
-                    std::mem::swap(waking, parked_wakers);
-                } else {
-                    waking.append(parked_wakers);
-                }
+            let Self {
+                waking,
+                parked_wakers,
+                ..
+            } = &mut *self;
+            if waking.is_empty() {
+                std::mem::swap(waking, parked_wakers);
+            } else {
+                waking.append(parked_wakers);
             }
+        }
+        if !self.waking.is_empty() {
             for _ in 0..self.wake_limit {
                 if let Some(waker) = self.waking.pop() {
                     waker.wake();
@@ -189,19 +189,24 @@ where
 
         // Service downstreams
         for (serviced, waker) in self.shared.drain_wakelist().enumerate() {
-            if self.wake_limit == serviced {
-                context.waker().wake_by_ref();
-                break;
-            }
-
             let tip = self.next_message_id - 1;
             if tip < waker.next_message_id() {
                 log::trace!("tip at {tip}, parking at {}", waker.next_message_id());
                 self.parked_wakers.push(waker);
+
+                if self.wake_limit == serviced {
+                    context.waker().wake_by_ref();
+                    break;
+                }
                 continue; // this waker does not need to be woken. We parked it waiting new data
             }
             log::trace!("waking at {}", waker.next_message_id());
             waker.wake();
+
+            if self.wake_limit == serviced {
+                context.waker().wake_by_ref();
+                break;
+            }
         }
 
         // Awaiting an upstream message, for which we are already Pending, and we've woken what we need to
