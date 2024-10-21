@@ -143,7 +143,7 @@ where
     #[inline]
     pub fn subscriber_count_handle(&self) -> SubscriberCountHandle {
         SubscriberCountHandle {
-            subscriber_count: self.subscriber_count.clone(),
+            subscriber_count: Arc::downgrade(&self.subscriber_count),
         }
     }
 }
@@ -189,13 +189,17 @@ impl WakeHandle {
 /// Subscriber counts are updated asynchronously, so values may be stale.
 #[derive(Debug, Clone)]
 pub struct SubscriberCountHandle {
-    subscriber_count: Arc<AtomicUsize>,
+    subscriber_count: std::sync::Weak<AtomicUsize>,
 }
 
 impl SubscriberCountHandle {
     /// Get the current subscriber count.
     /// Subscriber counts are updated asynchronously, so values may be stale.
-    pub fn get(&self) -> usize {
-        self.subscriber_count.load(Ordering::Relaxed)
+    ///
+    /// Returns None if the channel has been dropped.
+    pub fn get(&self) -> Option<usize> {
+        self.subscriber_count
+            .upgrade()
+            .map(|count| count.load(Ordering::Relaxed))
     }
 }

@@ -105,6 +105,7 @@ use buffer_policy::{BufferLengthPolicy, BufferPolicy};
 pub use engine::Engine;
 pub use receiver::Receiver;
 pub use sender::{Sender, SenderStream};
+pub use shared::SubscriberCountHandle;
 pub use splaycast::Splaycast;
 
 /// Wrap a stream with a Splaycast - a broadcast channel for streams.
