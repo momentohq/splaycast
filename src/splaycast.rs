@@ -38,7 +38,7 @@ where
     /// this receiver, and lag is tracked if you consume too slowly and fall off of
     /// the configured buffer.
     pub fn subscribe(&self) -> Receiver<Item> {
-        Receiver::new(self.shared.clone())
+        Receiver::new(self.shared.next_receiver_id(), self.shared.clone())
     }
 
     /// Get a new streaming Receiver from the upstream stream. Values are cloned to
@@ -49,7 +49,7 @@ where
     /// race with the buffer policy to get the items, so you may see lag messages as you
     /// get started and catch up.
     pub fn subscribe_at_tail(&self) -> Receiver<Item> {
-        Receiver::new_at_buffer_start(self.shared.clone())
+        Receiver::new_at_buffer_start(self.shared.next_receiver_id(), self.shared.clone())
     }
 
     /// This is informational, and may be stale before it even returns. It is maintained
