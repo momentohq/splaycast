@@ -8,7 +8,7 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
-use crossbeam_queue::ArrayQueue;
+use crossbeam_queue::SegQueue;
 use futures::task::AtomicWaker;
 
 use crate::SplaycastEntry;
@@ -18,7 +18,7 @@ pub struct Shared<Item> {
     subscriber_count: Arc<AtomicUsize>,
     subscribe_sequence: AtomicU64,
     subscribe_tail_sequence: AtomicU64,
-    wakers: Arc<ArrayQueue<WakeHandle>>,
+    wakers: Arc<SegQueue<WakeHandle>>,
     queue: Arc<ArcSwap<VecDeque<SplaycastEntry<Item>>>>,
     waker: AtomicWaker,
     is_dead: AtomicBool,
@@ -44,7 +44,7 @@ where
             subscriber_count: Default::default(),
             subscribe_sequence: AtomicU64::new(1),
             subscribe_tail_sequence: AtomicU64::new(1),
-            wakers: Arc::new(ArrayQueue::new(1024)),
+            wakers: Arc::new(SegQueue::new()),
             queue: Arc::new(ArcSwap::from_pointee(VecDeque::new())),
             waker: Default::default(),
             is_dead: Default::default(),
@@ -121,10 +121,7 @@ where
             handle.wake();
             return;
         }
-        if let Err(handle) = self.wakers.push(handle) {
-            log::trace!("waker queue full. Engine is draining too slowly");
-            handle.wake();
-        }
+        self.wakers.push(handle);
         self.waker.wake()
     }
 

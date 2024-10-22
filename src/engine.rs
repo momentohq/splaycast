@@ -94,6 +94,7 @@ where
                                 })
                                 .unwrap_or(BufferInstruction::Retain)
                         {
+                            #[allow(clippy::expect_used)]
                             let mut oldest = new_queue
                                 .pop_front()
                                 .expect("front was checked above; this is removing the value");
