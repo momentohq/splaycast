@@ -31,6 +31,7 @@ pub struct Receiver<Item>
 where
     Item: Clone,
 {
+    id: u64,
     shared: Arc<Shared<Item>>,
     next_message_id: u64,
 }
@@ -40,7 +41,8 @@ where
     Item: Clone,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SplaycastReceiver")
+        f.debug_struct("Receiver")
+            .field("id", &self.id)
             .field("next", &self.next_message_id)
             .finish()
     }
@@ -50,27 +52,29 @@ impl<Item> Receiver<Item>
 where
     Item: Clone,
 {
-    pub(crate) fn new(shared: Arc<Shared<Item>>) -> Self {
+    pub(crate) fn new(id: u64, shared: Arc<Shared<Item>>) -> Self {
         shared.increment_subscriber_count();
         Self {
+            id,
             next_message_id: shared.subscribe_sequence_number(),
             shared,
         }
     }
 
-    pub(crate) fn new_at_buffer_start(shared: Arc<Shared<Item>>) -> Self {
+    pub(crate) fn new_at_buffer_start(id: u64, shared: Arc<Shared<Item>>) -> Self {
         shared.increment_subscriber_count();
         Self {
+            id,
             next_message_id: shared.subscribe_tail_sequence_number(),
             shared,
         }
     }
 
     fn mark_clean_and_register_for_wake(&mut self, context: &mut Context<'_>) {
-        self.shared.register_waker(WakeHandle::new(
-            self.next_message_id,
-            context.waker().clone(),
-        ));
+        self.shared.register_waker(
+            self.id,
+            WakeHandle::new(self.next_message_id, context.waker().clone()),
+        );
     }
 }
 

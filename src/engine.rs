@@ -1,6 +1,6 @@
 use futures::Stream;
 use std::{
-    collections::VecDeque,
+    collections::{hash_map::Entry, HashMap, VecDeque},
     pin::{pin, Pin},
     sync::Arc,
     task::{Context, Poll},
@@ -24,8 +24,9 @@ pub struct Engine<Upstream, Item: Clone, Policy> {
     // TODO: buffer the buffers
     shared: Arc<Shared<Item>>,
     buffer_policy: Policy,
-    parked_wakers: Vec<WakeHandle>,
-    waking: Vec<WakeHandle>,
+    park_queue: Vec<u64>,
+    wake_queue: Vec<u64>,
+    parked_wakers: HashMap<u64, WakeHandle>,
     wake_limit: usize,
 }
 
@@ -57,8 +58,9 @@ where
             upstream,
             shared,
             buffer_policy,
+            park_queue: Default::default(),
+            wake_queue: Default::default(),
             parked_wakers: Default::default(),
-            waking: Default::default(),
             wake_limit: 32,
         }
     }
@@ -165,37 +167,63 @@ where
         if dirty {
             log::trace!("notifying parked: {}", self.parked_wakers.len());
             let Self {
-                waking,
-                parked_wakers,
+                park_queue,
+                wake_queue,
                 ..
             } = &mut *self;
-            if waking.is_empty() {
-                std::mem::swap(waking, parked_wakers);
+            if wake_queue.is_empty() {
+                std::mem::swap(park_queue, wake_queue);
             } else {
-                waking.append(parked_wakers);
+                wake_queue.append(park_queue);
             }
         }
-        if !self.waking.is_empty() {
+        if !self.wake_queue.is_empty() {
             for _ in 0..self.wake_limit {
-                if let Some(waker) = self.waking.pop() {
-                    waker.wake();
+                if let Some(id) = self.wake_queue.pop() {
+                    if let Some(waker) = self.parked_wakers.remove(&id) {
+                        waker.wake();
+                    } else {
+                        log::warn!("wake id {id} not found");
+                    }
                 } else {
                     break;
                 }
             }
-            if !self.waking.is_empty() {
+            if !self.wake_queue.is_empty() {
+                // I hit the work limit, but there's more to do. Yield this task back to the runtime and do more later.
                 context.waker().wake_by_ref();
             }
         }
 
         // Service downstreams
-        for (serviced, waker) in self.shared.drain_wakelist().enumerate() {
-            let tip = self.next_message_id - 1;
+        let tip = self.next_message_id - 1;
+        let wake_limit = self.wake_limit;
+        let Self {
+            shared,
+            park_queue,
+            parked_wakers,
+            ..
+        } = &mut *self;
+        for (serviced, (id, waker)) in shared.drain_wakelist().enumerate() {
             if tip < waker.next_message_id() {
                 log::trace!("tip at {tip}, parking at {}", waker.next_message_id());
-                self.parked_wakers.push(waker);
+                let entry = parked_wakers.entry(id);
+                match entry {
+                    Entry::Occupied(mut occupied_entry) => {
+                        if !occupied_entry.get().will_wake(&waker) {
+                            log::trace!("new waker for the same task id");
+                            occupied_entry.insert(waker);
+                        } else {
+                            log::trace!("duplicate wake registration");
+                        }
+                    }
+                    Entry::Vacant(vacant_entry) => {
+                        park_queue.push(id);
+                        vacant_entry.insert(waker);
+                    }
+                }
 
-                if self.wake_limit == serviced {
+                if wake_limit == serviced {
                     context.waker().wake_by_ref();
                     break;
                 }
@@ -204,7 +232,7 @@ where
             log::trace!("waking at {}", waker.next_message_id());
             waker.wake();
 
-            if self.wake_limit == serviced {
+            if wake_limit == serviced {
                 context.waker().wake_by_ref();
                 break;
             }
@@ -219,10 +247,10 @@ where
 impl<Upstream, Item: Clone, Policy> Engine<Upstream, Item, Policy> {
     fn wake_everybody_because_i_am_dead(&mut self) {
         log::trace!("is dead - waking everyone");
-        for waker in std::mem::take(&mut self.parked_wakers) {
+        for (_, waker) in std::mem::take(&mut self.parked_wakers) {
             waker.wake();
         }
-        for waker in self.shared.drain_wakelist() {
+        for (_, waker) in self.shared.drain_wakelist() {
             waker.wake();
         }
         log::trace!("all all wake handles have been notified. Completing the Engine task");

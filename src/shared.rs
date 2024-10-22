@@ -15,10 +15,11 @@ use crate::SplaycastEntry;
 
 /// Shared, lock-free state for splaying out notifications to receiver streams from an upstream stream.
 pub struct Shared<Item> {
+    next_receiver_id: AtomicU64,
     subscriber_count: Arc<AtomicUsize>,
     subscribe_sequence: AtomicU64,
     subscribe_tail_sequence: AtomicU64,
-    wakers: Arc<SegQueue<WakeHandle>>,
+    wakers: Arc<SegQueue<(u64, WakeHandle)>>,
     queue: Arc<ArcSwap<VecDeque<SplaycastEntry<Item>>>>,
     waker: AtomicWaker,
     is_dead: AtomicBool,
@@ -41,6 +42,7 @@ where
 {
     pub fn new() -> Self {
         Self {
+            next_receiver_id: Default::default(),
             subscriber_count: Default::default(),
             subscribe_sequence: AtomicU64::new(1),
             subscribe_tail_sequence: AtomicU64::new(1),
@@ -58,6 +60,10 @@ where
 
     pub fn is_dead(&self) -> bool {
         self.is_dead.load(Ordering::Acquire)
+    }
+
+    pub fn next_receiver_id(&self) -> u64 {
+        self.next_receiver_id.fetch_add(1, Ordering::Relaxed)
     }
 
     #[inline]
@@ -115,13 +121,13 @@ where
     }
 
     #[inline]
-    pub fn register_waker(&self, handle: WakeHandle) {
+    pub fn register_waker(&self, receiver_id: u64, handle: WakeHandle) {
         log::trace!("register waker at {}", handle.message_id);
         if self.is_dead() {
             handle.wake();
             return;
         }
-        self.wakers.push(handle);
+        self.wakers.push((receiver_id, handle));
         self.waker.wake()
     }
 
@@ -131,7 +137,7 @@ where
     }
 
     #[inline]
-    pub fn drain_wakelist(self: &Arc<Self>) -> impl Iterator<Item = WakeHandle> {
+    pub fn drain_wakelist(self: &Arc<Self>) -> impl Iterator<Item = (u64, WakeHandle)> {
         WakeIterator {
             shared: self.clone(),
         }
@@ -152,7 +158,7 @@ where
     shared: Arc<Shared<T>>,
 }
 impl<T: Clone> Iterator for WakeIterator<T> {
-    type Item = WakeHandle;
+    type Item = (u64, WakeHandle);
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -179,6 +185,11 @@ impl WakeHandle {
     #[inline]
     pub fn next_message_id(&self) -> u64 {
         self.message_id
+    }
+
+    #[inline]
+    pub fn will_wake(&self, other: &Self) -> bool {
+        self.waker.will_wake(&other.waker)
     }
 }
 
